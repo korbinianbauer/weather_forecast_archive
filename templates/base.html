@@ -143,5 +143,18 @@
 </main>
 
 {% block scripts %}{% endblock %}
+<script>
+function fmtLocalTime(utcIso) {
+  const d = new Date(utcIso.endsWith('Z') ? utcIso : utcIso + 'Z');
+  const pad = n => String(n).padStart(2, '0');
+  return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear()
+       + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('time.local-time').forEach(el => {
+    el.textContent = fmtLocalTime(el.getAttribute('datetime'));
+  });
+});
+</script>
 </body>
 </html>

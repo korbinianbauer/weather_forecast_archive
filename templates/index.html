@@ -89,7 +89,7 @@
           <div class="provider-label">
             {{ provider_labels.get(row.provider, row.provider) }}
             {% if row.fetched_at %}
-            <span class="fetched">polled {{ row.fetched_at|dt }} UTC</span>
+            <span class="fetched">polled <time class="local-time" datetime="{{ row.fetched_at }}">{{ row.fetched_at|dt }}</time></span>
             {% endif %}
           </div>
           <div class="day-grid" style="grid-template-columns: repeat({{ n }}, minmax(0, 1fr));">
