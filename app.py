@@ -372,8 +372,31 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
                 'marker': {'size': 6, 'color': color},
                 'metric': 'temperature', 'legendgroup': label,
             })
-        elif not (has_max or has_min):
-            # No temperature data at all — still emit an empty trace so the chart renders
+        elif has_max or has_min:
+            # Daily data: only max/min available — emit visible lines+markers for both.
+            # The invisible fill-band above only renders with 2+ points; these markers
+            # ensure something is always visible even with a single poll.
+            show = label not in legend_shown
+            if show:
+                legend_shown.add(label)
+            all_traces.append({
+                'x': xs, 'y': ymx,
+                'type': 'scatter', 'mode': 'lines+markers',
+                'name': label, 'showlegend': show,
+                'line': {'color': color, 'width': 2},
+                'marker': {'size': 6, 'color': color, 'symbol': 'triangle-up'},
+                'metric': 'temperature', 'legendgroup': label,
+            })
+            all_traces.append({
+                'x': xs, 'y': ymn,
+                'type': 'scatter', 'mode': 'lines+markers',
+                'name': label, 'showlegend': False,
+                'line': {'color': color, 'width': 2, 'dash': 'dot'},
+                'marker': {'size': 6, 'color': color, 'symbol': 'triangle-down'},
+                'metric': 'temperature', 'legendgroup': label,
+            })
+        else:
+            # No temperature data at all — emit an empty trace so the chart always renders.
             show = label not in legend_shown
             if show:
                 legend_shown.add(label)
