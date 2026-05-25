@@ -71,10 +71,12 @@
                 onclick="togglePlot({{ loc.id }})">📈 Plot</button>
         {% if session.logged_in %}
         <form method="post" action="{{ url_for('refresh_location', location_id=loc.id) }}" style="display:contents;">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
           <button class="btn btn-outline btn-sm">↻</button>
         </form>
         <form method="post" action="{{ url_for('delete_location', location_id=loc.id) }}"
               onsubmit="return confirm('Remove {{ loc.name }}?')" style="display:contents;">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
           <button class="btn btn-danger btn-sm">✕</button>
         </form>
         {% endif %}
@@ -198,6 +200,7 @@
     </div>
     {% endfor %}
     <form method="post" action="{{ url_for('add_location') }}" id="addForm" onsubmit="injectFormFields()">
+      <input type="hidden" name="_csrf"     value="{{ csrf_token() }}">
       <input type="hidden" name="name"      id="f_name">
       <input type="hidden" name="latitude"  id="f_lat">
       <input type="hidden" name="longitude" id="f_lon">
@@ -248,11 +251,19 @@ function fetchResults(provider, q) {
     .then(data => {
       const box = document.getElementById('results-' + provider);
       if (!data.length) { box.classList.remove('visible'); return; }
-      box.innerHTML = data.map(item => `
-        <div class="search-result-item" onclick='selectItem(${JSON.stringify(provider)}, ${JSON.stringify(item)})'>
-          <div class="city-name">${item.name}</div>
-          <div class="city-meta">${item.extra.title || item.name}</div>
-        </div>`).join('');
+      box.replaceChildren(...data.map(item => {
+        const div = document.createElement('div');
+        div.className = 'search-result-item';
+        div.addEventListener('click', () => selectItem(provider, item));
+        const name = document.createElement('div');
+        name.className = 'city-name';
+        name.textContent = item.name;
+        const meta = document.createElement('div');
+        meta.className = 'city-meta';
+        meta.textContent = item.extra.title || item.name;
+        div.append(name, meta);
+        return div;
+      }));
       box.classList.add('visible');
     });
 }

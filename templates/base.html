@@ -123,6 +123,7 @@
   <a href="/db" style="color:rgba(255,255,255,.75); font-size:.82rem; font-weight:500; text-decoration:none;">🗄 DB</a>
   {% if session.logged_in %}
   <form method="post" action="{{ url_for('logout') }}" style="margin:0;">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
     <button type="submit"
             style="background:none; border:1px solid rgba(255,255,255,.4); color:rgba(255,255,255,.85);
                    border-radius:5px; padding:.25rem .65rem; cursor:pointer; font-size:.8rem;">

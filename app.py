@@ -1,12 +1,16 @@
+import hmac
 import json
 import logging
 import os
+import secrets
+import time
+from collections import defaultdict
 from datetime import datetime
 from functools import wraps
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 
 import db
 import providers
@@ -15,9 +19,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY') or ''
+app.secret_key = os.environ.get('SECRET_KEY', '')
 if not app.secret_key:
-    logger.warning('SECRET_KEY not set — sessions will not persist across restarts')
+    raise RuntimeError('SECRET_KEY environment variable is not set')
 
 _ADMIN_USER = os.environ.get('BETHER_USER', 'admin')
 _ADMIN_PASSWORD = os.environ.get('BETHER_PASSWORD', '')
@@ -25,6 +29,45 @@ if not _ADMIN_PASSWORD:
     logger.warning('BETHER_PASSWORD not set — login will always fail')
 
 db.init_db()
+
+
+# ── CSRF ──────────────────────────────────────────────────────────────────────
+
+def _csrf_token() -> str:
+    if '_csrf' not in session:
+        session['_csrf'] = secrets.token_hex(16)
+    return session['_csrf']
+
+app.jinja_env.globals['csrf_token'] = _csrf_token
+
+
+def csrf_protect(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.form.get('_csrf', '')
+        expected = session.get('_csrf', '')
+        if not expected or not hmac.compare_digest(token, expected):
+            abort(403)
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ── rate limiting ─────────────────────────────────────────────────────────────
+
+_login_attempts: dict[str, list[float]] = defaultdict(list)
+_RATE_LIMIT_WINDOW = 300  # seconds
+_RATE_LIMIT_MAX    = 10   # failed attempts per window
+
+
+def _is_rate_limited(ip: str) -> bool:
+    now = time.monotonic()
+    recent = [t for t in _login_attempts[ip] if now - t < _RATE_LIMIT_WINDOW]
+    _login_attempts[ip] = recent
+    return len(recent) >= _RATE_LIMIT_MAX
+
+
+def _record_failed_login(ip: str) -> None:
+    _login_attempts[ip].append(time.monotonic())
 
 
 # ── auth ──────────────────────────────────────────────────────────────────────
@@ -42,20 +85,27 @@ def login_required(f):
 def login():
     error = None
     if request.method == 'POST':
-        u = request.form.get('username', '')
-        p = request.form.get('password', '')
-        if u == _ADMIN_USER and p == _ADMIN_PASSWORD:
-            session['logged_in'] = True
-            next_url = request.args.get('next') or url_for('index')
-            # guard against open-redirect
-            if not next_url.startswith('/'):
-                next_url = url_for('index')
-            return redirect(next_url)
-        error = 'Invalid username or password.'
+        ip = request.remote_addr or ''
+        if _is_rate_limited(ip):
+            error = 'Too many attempts. Try again later.'
+        else:
+            u = request.form.get('username', '')
+            p = request.form.get('password', '')
+            user_ok = hmac.compare_digest(u, _ADMIN_USER)
+            pass_ok = bool(_ADMIN_PASSWORD) and hmac.compare_digest(p, _ADMIN_PASSWORD)
+            if user_ok and pass_ok:
+                session['logged_in'] = True
+                next_url = request.args.get('next') or url_for('index')
+                if not next_url.startswith('/') or next_url.startswith('//'):
+                    next_url = url_for('index')
+                return redirect(next_url)
+            _record_failed_login(ip)
+            error = 'Invalid username or password.'
     return render_template('login.html', error=error)
 
 
 @app.route('/logout', methods=['POST'])
+@csrf_protect
 def logout():
     session.clear()
     return redirect(url_for('index'))
@@ -174,6 +224,7 @@ def search():
 
 @app.route('/add', methods=['POST'])
 @login_required
+@csrf_protect
 def add_location():
     name = request.form.get('name', '').strip()
     latitude = float(request.form.get('latitude') or 0)
@@ -354,6 +405,7 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
 
 @app.route('/location/<int:location_id>/add_source', methods=['POST'])
 @login_required
+@csrf_protect
 def add_location_source_route(location_id):
     location = db.get_location(location_id)
     if not location:
@@ -383,6 +435,7 @@ def add_location_source_route(location_id):
 
 @app.route('/location/<int:location_id>/refresh', methods=['POST'])
 @login_required
+@csrf_protect
 def refresh_location(location_id):
     for source in db.get_location_sources(location_id):
         try:
@@ -394,6 +447,7 @@ def refresh_location(location_id):
 
 @app.route('/location/<int:location_id>/delete', methods=['POST'])
 @login_required
+@csrf_protect
 def delete_location(location_id):
     db.delete_location(location_id)
     return redirect(url_for('index'))
