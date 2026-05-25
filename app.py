@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import secrets
 from datetime import datetime
 from functools import wraps
 
@@ -16,13 +15,14 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
+app.secret_key = os.environ.get('SECRET_KEY') or ''
+if not app.secret_key:
+    logger.warning('SECRET_KEY not set — sessions will not persist across restarts')
 
 _ADMIN_USER = os.environ.get('BETHER_USER', 'admin')
 _ADMIN_PASSWORD = os.environ.get('BETHER_PASSWORD', '')
 if not _ADMIN_PASSWORD:
-    _ADMIN_PASSWORD = secrets.token_urlsafe(12)
-    logger.warning('BETHER_PASSWORD not set — using generated password: %s', _ADMIN_PASSWORD)
+    logger.warning('BETHER_PASSWORD not set — login will always fail')
 
 db.init_db()
 
