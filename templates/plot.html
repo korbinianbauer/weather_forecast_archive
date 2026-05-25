@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}{{ location.name }} — Forecast Evolution{% endblock %}
+
+{% block content %}
+
+{# ── header ── #}
+<div style="display:flex; flex-wrap:wrap; gap:.75rem; align-items:center; margin-bottom:1rem;">
+  <a href="{{ url_for('index') }}" style="color:var(--muted); text-decoration:none; font-size:.85rem;">← All locations</a>
+  <span style="color:var(--border);">|</span>
+  <span style="color:var(--muted); font-size:.85rem;">{{ location.name }}</span>
+  <span style="color:var(--border);">|</span>
+  <h2 style="margin:0; font-size:1.4rem;">Forecast Evolution</h2>
+</div>
+
+{# ── controls ── #}
+<div class="card gap">
+  <form method="get" style="display:flex; flex-wrap:wrap; gap:1.25rem; align-items:flex-end;">
+
+    <div>
+      <label style="display:block; font-size:.8rem; font-weight:600; color:var(--muted); margin-bottom:.3rem;">
+        TARGET DATE
+      </label>
+      <select name="date" id="dateSelect"
+              style="padding:.45rem .7rem; border:1px solid var(--border); border-radius:6px; font-size:.875rem; background:var(--surface);"
+              onchange="this.form.submit()">
+        {% for d in available_dates %}
+        <option value="{{ d }}" {% if d == target_date %}selected{% endif %}>{{ d }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div>
+      <label style="display:block; font-size:.8rem; font-weight:600; color:var(--muted); margin-bottom:.3rem;">
+        PROVIDERS
+      </label>
+      <div style="display:flex; gap:.75rem; flex-wrap:wrap; padding-top:.2rem;">
+        {% for p in all_providers %}
+        <label style="display:flex; align-items:center; gap:.35rem; font-size:.875rem; cursor:pointer;">
+          <input type="checkbox" name="providers" value="{{ p }}"
+                 {% if p in selected_providers %}checked{% endif %}
+                 style="accent-color:var(--primary);">
+          {{ provider_labels.get(p, p) }}
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary btn-sm">Update</button>
+  </form>
+
+  {% if target_date %}
+  <div style="margin-top:.75rem; font-size:.82rem; color:var(--muted);">
+    Showing how the daily forecast for <strong>{{ target_date }}</strong> changed over time.
+    Each point is one archived poll; x-axis is when the poll was taken.
+  </div>
+  {% endif %}
+</div>
+
+{# ── charts ── #}
+{% if traces_json != '[]' %}
+<div id="charts-container"></div>
+{% else %}
+<div class="card" style="text-align:center; padding:3rem; color:var(--muted);">
+  No archived forecasts found for this selection.
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<script>
+(function () {
+  const tracesAll = {{ traces_json|safe }};
+  if (!tracesAll.length) return;
+
+  const METRIC_ORDER = [
+    'temperature',
+    'precipitation_precip_probability',
+    'precipitation_precip_amount',
+    'wind_wind_speed',
+    'cloud_cloud_cover',
+    'pressure_pressure',
+    'humidity_humidity',
+  ];
+  const METRIC_LABELS = {
+    'temperature':                      'Temperature °C',
+    'precipitation_precip_probability': 'Precip probability %',
+    'precipitation_precip_amount':      'Precipitation mm',
+    'wind_wind_speed':                  'Wind speed km/h',
+    'cloud_cloud_cover':                'Cloud cover %',
+    'pressure_pressure':                'Pressure hPa',
+    'humidity_humidity':                'Humidity %',
+  };
+
+  const presentMetrics = METRIC_ORDER.filter(m => tracesAll.some(t => t.metric === m));
+  const container = document.getElementById('charts-container');
+  const divIds = [];
+
+  for (const metric of presentMetrics) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'card gap';
+
+    const title = document.createElement('h3');
+    title.style.cssText = 'font-size:1rem;font-weight:700;margin-bottom:.5rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;';
+    title.textContent = METRIC_LABELS[metric] || metric;
+    wrapper.appendChild(title);
+
+    const plotDiv = document.createElement('div');
+    const divId = 'plot-' + metric.replace(/_/g, '-');
+    plotDiv.id = divId;
+    plotDiv.style.height = '280px';
+    wrapper.appendChild(plotDiv);
+    container.appendChild(wrapper);
+    divIds.push(divId);
+  }
+
+  const isFirst = {};
+  for (const m of presentMetrics) isFirst[m] = true;
+
+  for (let mi = 0; mi < presentMetrics.length; mi++) {
+    const metric = presentMetrics[mi];
+    const traces = tracesAll
+      .filter(t => t.metric === metric)
+      .map(t => {
+        const tr = Object.assign({}, t);
+        // Show legend only in the first chart where this trace appears
+        if (tr.showlegend && !isFirst[metric]) tr.showlegend = false;
+        return tr;
+      });
+
+    if (isFirst[metric]) isFirst[metric] = false;
+
+    const layout = {
+      margin:      { t: 10, b: 80, l: 60, r: 20 },
+      xaxis: {
+        type: 'date',
+        title: { text: 'Poll timestamp (UTC)', standoff: 8 },
+        tickformat: '%d.%m %H:%M',
+        gridcolor: '#e2e8f0',
+      },
+      yaxis:       { gridcolor: '#e2e8f0', zeroline: false },
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor:  '#f8fafc',
+      legend: { orientation: 'h', yanchor: 'top', y: -0.28, xanchor: 'left', x: 0 },
+      hovermode:   'x unified',
+      font:        { family: 'system-ui, -apple-system, sans-serif', size: 12 },
+    };
+
+    Plotly.newPlot(divIds[mi], traces, layout, { responsive: true, displayModeBar: false });
+  }
+
+  // Synchronise x-axis pan/zoom across all charts
+  for (const divId of divIds) {
+    document.getElementById(divId).on('plotly_relayout', function (ev) {
+      const upd = {};
+      if (ev['xaxis.range[0]'] !== undefined) {
+        upd['xaxis.range[0]'] = ev['xaxis.range[0]'];
+        upd['xaxis.range[1]'] = ev['xaxis.range[1]'];
+      } else if (ev['xaxis.autorange']) {
+        upd['xaxis.autorange'] = true;
+      }
+      if (!Object.keys(upd).length) return;
+      for (const id of divIds) {
+        if (id !== divId) Plotly.relayout(id, upd);
+      }
+    });
+  }
+})();
+</script>
+{% endblock %}

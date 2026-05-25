@@ -1,0 +1,373 @@
+import json
+import os
+import sqlite3
+from contextlib import contextmanager
+
+DB_PATH = os.path.join(os.path.dirname(__file__), 'weather.db')
+
+
+# ── init / migration ──────────────────────────────────────────────────────────
+
+def init_db():
+    with get_db() as conn:
+        existing_tables = {
+            r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+
+        # Drop pre-provider-architecture schema if location_sources is missing
+        if existing_tables and 'location_sources' not in existing_tables:
+            conn.executescript('''
+                DROP TABLE IF EXISTS forecast_snapshots;
+                DROP TABLE IF EXISTS locations;
+            ''')
+
+        conn.executescript('''
+            CREATE TABLE IF NOT EXISTS locations (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name       TEXT NOT NULL,
+                latitude   REAL,
+                longitude  REAL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS location_sources (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id          INTEGER NOT NULL
+                                         REFERENCES locations(id) ON DELETE CASCADE,
+                provider             TEXT NOT NULL,
+                provider_location_id TEXT NOT NULL,
+                metadata             TEXT NOT NULL DEFAULT '{}',
+                UNIQUE(location_id, provider)
+            );
+
+            CREATE TABLE IF NOT EXISTS forecast_snapshots (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id          INTEGER NOT NULL
+                                         REFERENCES locations(id) ON DELETE CASCADE,
+                provider             TEXT NOT NULL,
+                granularity          TEXT NOT NULL DEFAULT 'daily',
+                fetched_at           TEXT NOT NULL,
+                forecast_date        TEXT NOT NULL,
+                forecast_hour        INTEGER,
+                condition_text       TEXT,
+                icon_url             TEXT,
+                temperature          REAL,
+                temp_max             REAL,
+                temp_min             REAL,
+                precip_probability   INTEGER,
+                precip_amount        REAL,
+                wind_direction       TEXT,
+                wind_speed           INTEGER,
+                cloud_cover          INTEGER,
+                pressure             REAL,
+                humidity             INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_snap_loc_provider_gran
+                ON forecast_snapshots(location_id, provider, granularity, fetched_at, forecast_date);
+        ''')
+
+        # Add columns introduced after initial deployment (idempotent)
+        _ensure_columns(conn, 'forecast_snapshots', {
+            'granularity':        "TEXT NOT NULL DEFAULT 'daily'",
+            'forecast_hour':      'INTEGER',
+            'temperature':        'REAL',
+            'cloud_cover':        'INTEGER',
+            'pressure':           'REAL',
+            'humidity':           'INTEGER',
+        })
+
+
+def _ensure_columns(conn, table: str, columns: dict[str, str]):
+    existing = {row[1] for row in conn.execute(f'PRAGMA table_info({table})')}
+    for col, definition in columns.items():
+        if col not in existing:
+            conn.execute(f'ALTER TABLE {table} ADD COLUMN {col} {definition}')
+
+
+# ── connection ────────────────────────────────────────────────────────────────
+
+@contextmanager
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON')
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+# ── locations ─────────────────────────────────────────────────────────────────
+
+def add_location(name: str, latitude: float, longitude: float) -> int:
+    with get_db() as conn:
+        cur = conn.execute(
+            'INSERT INTO locations (name, latitude, longitude) VALUES (?, ?, ?)',
+            (name, latitude, longitude),
+        )
+        return cur.lastrowid
+
+
+def add_location_source(
+    location_id: int,
+    provider: str,
+    provider_location_id: str,
+    metadata: dict,
+):
+    with get_db() as conn:
+        conn.execute(
+            '''INSERT OR REPLACE INTO location_sources
+               (location_id, provider, provider_location_id, metadata)
+               VALUES (?, ?, ?, ?)''',
+            (location_id, provider, provider_location_id, json.dumps(metadata)),
+        )
+
+
+def get_location(location_id: int) -> dict | None:
+    with get_db() as conn:
+        row = conn.execute('SELECT * FROM locations WHERE id = ?', (location_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_location_sources(location_id: int) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            'SELECT * FROM location_sources WHERE location_id = ? ORDER BY provider',
+            (location_id,),
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d['metadata'] = json.loads(d['metadata'] or '{}')
+            result.append(d)
+        return result
+
+
+def get_locations() -> list[dict]:
+    with get_db() as conn:
+        return [dict(r) for r in conn.execute('''
+            SELECT l.*,
+                   (SELECT MAX(fetched_at) FROM forecast_snapshots
+                    WHERE location_id = l.id)                          AS last_polled,
+                   (SELECT COUNT(DISTINCT provider || fetched_at) FROM forecast_snapshots
+                    WHERE location_id = l.id)                          AS poll_count,
+                   (SELECT GROUP_CONCAT(provider, ', ') FROM location_sources
+                    WHERE location_id = l.id)                          AS providers
+            FROM locations l ORDER BY l.name
+        ''')]
+
+
+def delete_location(location_id: int):
+    with get_db() as conn:
+        conn.execute('DELETE FROM locations WHERE id = ?', (location_id,))
+
+
+# ── forecast snapshots ────────────────────────────────────────────────────────
+
+def save_forecast_batch(
+    location_id: int,
+    provider: str,
+    fetched_at: str,
+    entries: list,              # list[ForecastEntry]
+):
+    with get_db() as conn:
+        conn.executemany(
+            '''INSERT INTO forecast_snapshots
+               (location_id, provider, granularity, fetched_at,
+                forecast_date, forecast_hour,
+                condition_text, icon_url,
+                temperature, temp_max, temp_min,
+                precip_probability, precip_amount,
+                wind_direction, wind_speed,
+                cloud_cover, pressure, humidity)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            [
+                (
+                    location_id, provider, e.granularity, fetched_at,
+                    e.forecast_date, e.forecast_hour,
+                    e.condition_text, e.icon_url,
+                    e.temperature, e.temp_max, e.temp_min,
+                    e.precip_probability, e.precip_amount,
+                    e.wind_direction, e.wind_speed,
+                    e.cloud_cover, e.pressure, e.humidity,
+                )
+                for e in entries
+            ],
+        )
+
+
+def get_latest_forecast(
+    location_id: int,
+    provider: str | None = None,
+    granularity: str | None = None,
+) -> list[dict]:
+    with get_db() as conn:
+        clauses = ['location_id = ?']
+        params: list = [location_id]
+        if provider:
+            clauses.append('provider = ?')
+            params.append(provider)
+        if granularity:
+            clauses.append('granularity = ?')
+            params.append(granularity)
+        where = ' AND '.join(clauses)
+
+        latest_ts = conn.execute(
+            f'SELECT MAX(fetched_at) FROM forecast_snapshots WHERE {where}',
+            params,
+        ).fetchone()[0]
+        if not latest_ts:
+            return []
+
+        rows = conn.execute(
+            f'''SELECT * FROM forecast_snapshots
+                WHERE {where} AND fetched_at = ?
+                ORDER BY forecast_date, forecast_hour''',
+            params + [latest_ts],
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_poll_history(
+    location_id: int,
+    provider: str | None = None,
+    granularity: str | None = None,
+) -> list[tuple[str, str, str]]:
+    """Return (fetched_at, provider, granularity) tuples, newest first."""
+    with get_db() as conn:
+        clauses = ['location_id = ?']
+        params: list = [location_id]
+        if provider:
+            clauses.append('provider = ?')
+            params.append(provider)
+        if granularity:
+            clauses.append('granularity = ?')
+            params.append(granularity)
+        where = ' AND '.join(clauses)
+
+        rows = conn.execute(
+            f'''SELECT DISTINCT fetched_at, provider, granularity
+                FROM forecast_snapshots WHERE {where}
+                ORDER BY fetched_at DESC''',
+            params,
+        ).fetchall()
+        return [(r[0], r[1], r[2]) for r in rows]
+
+
+def get_forecasts_by_poll(
+    location_id: int,
+    fetched_at: str,
+    provider: str,
+    granularity: str,
+) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            '''SELECT * FROM forecast_snapshots
+               WHERE location_id = ? AND provider = ? AND granularity = ? AND fetched_at = ?
+               ORDER BY forecast_date, forecast_hour''',
+            (location_id, provider, granularity, fetched_at),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_available_forecast_dates(location_id: int) -> list[str]:
+    """All unique forecast dates archived for a location, newest first."""
+    with get_db() as conn:
+        return [r[0] for r in conn.execute(
+            '''SELECT DISTINCT forecast_date FROM forecast_snapshots
+               WHERE location_id = ? ORDER BY forecast_date DESC''',
+            (location_id,),
+        )]
+
+
+def get_polls_covering_date(
+    location_id: int,
+    target_date: str,
+    providers: list[str] | None = None,
+) -> list[dict]:
+    """
+    Find every poll that includes a forecast entry for target_date, then
+    return ALL entries from that poll up to and including target_date.
+    Each item: {fetched_at, provider, granularity, entries: [dict, ...]}.
+    """
+    with get_db() as conn:
+        if providers:
+            ph = ','.join('?' * len(providers))
+            rows = conn.execute(
+                f'''SELECT DISTINCT fetched_at, provider, granularity
+                    FROM forecast_snapshots
+                    WHERE location_id = ? AND forecast_date = ?
+                      AND provider IN ({ph})
+                    ORDER BY fetched_at''',
+                [location_id, target_date] + list(providers),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                '''SELECT DISTINCT fetched_at, provider, granularity
+                   FROM forecast_snapshots
+                   WHERE location_id = ? AND forecast_date = ?
+                   ORDER BY fetched_at''',
+                [location_id, target_date],
+            ).fetchall()
+
+        result = []
+        for fetched_at, provider, granularity in rows:
+            entries = conn.execute(
+                '''SELECT * FROM forecast_snapshots
+                   WHERE location_id = ? AND provider = ?
+                     AND granularity = ? AND fetched_at = ?
+                     AND forecast_date <= ?
+                   ORDER BY forecast_date, forecast_hour''',
+                [location_id, provider, granularity, fetched_at, target_date],
+            ).fetchall()
+            result.append({
+                'fetched_at': fetched_at,
+                'provider': provider,
+                'granularity': granularity,
+                'entries': [dict(e) for e in entries],
+            })
+        return result
+
+
+def get_forecast_evolution(
+    location_id: int,
+    target_date: str,
+    providers: list[str] | None = None,
+) -> list[dict]:
+    """
+    For every archived poll that has a daily forecast entry FOR target_date,
+    return that single entry. Returns rows sorted by fetched_at ASC.
+    """
+    with get_db() as conn:
+        if providers:
+            ph = ','.join('?' * len(providers))
+            provider_clause = f'AND provider IN ({ph})'
+            params: list = [location_id, target_date] + list(providers)
+        else:
+            provider_clause = ''
+            params = [location_id, target_date]
+
+        rows = conn.execute(
+            f'''SELECT * FROM forecast_snapshots
+                WHERE location_id = ? AND granularity = 'daily' AND forecast_date = ?
+                {provider_clause}
+                ORDER BY fetched_at ASC''',
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def already_polled_today(location_id: int, provider: str) -> bool:
+    with get_db() as conn:
+        count = conn.execute(
+            '''SELECT COUNT(*) FROM forecast_snapshots
+               WHERE location_id = ? AND provider = ?
+               AND fetched_at >= strftime('%Y-%m-%d', 'now')''',
+            (location_id, provider),
+        ).fetchone()[0]
+        return count > 0

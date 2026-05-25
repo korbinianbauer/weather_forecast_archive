@@ -1,0 +1,477 @@
+{% extends "base.html" %}
+{% block title %}Weather Archive — Locations{% endblock %}
+
+{% block content %}
+<style>
+  .loc-header {
+    display: flex; flex-wrap: wrap; align-items: center;
+    gap: .6rem; margin-bottom: .85rem;
+  }
+  .loc-header h2 { margin: 0; font-size: 1.15rem; }
+  .loc-actions { margin-left: auto; display: flex; gap: .4rem; flex-wrap: wrap; }
+
+  .provider-row { margin-bottom: .6rem; }
+  .provider-row:last-child { margin-bottom: 0; }
+  .provider-label {
+    font-size: .7rem; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .06em;
+    margin-bottom: .3rem; display: flex; align-items: baseline; gap: .5rem;
+  }
+  .provider-label .fetched {
+    font-weight: 400; text-transform: none; letter-spacing: 0; font-size: .68rem;
+  }
+
+  .day-grid { display: grid; gap: 3px; }
+  .day-cell {
+    border: 1px solid var(--border); border-radius: 5px;
+    padding: .35rem .15rem; text-align: center;
+    background: var(--surface); overflow: hidden; min-width: 0;
+  }
+  .day-cell.empty { background: transparent; border-color: transparent; }
+  a.day-cell { text-decoration: none; color: inherit; cursor: pointer; }
+  a.day-cell:hover { border-color: var(--primary); background: #eff6ff; }
+  .day-cell .dc-date { font-size: .62rem; font-weight: 700; color: var(--muted); white-space: nowrap; }
+  .day-cell img.dc-icon { width: 30px; height: 30px; display: block; margin: .2rem auto; }
+  .day-cell .dc-temps { font-size: .72rem; white-space: nowrap; }
+  .day-cell .dc-max { color: var(--warm); font-weight: 700; }
+  .day-cell .dc-min { color: var(--cold); }
+  .day-cell .dc-precip { font-size: .62rem; color: #3b82f6; margin-top: .1rem; }
+
+  .forecast-plot { display: none; }
+  .forecast-plot.visible { display: block; }
+  .plot-charts { display: flex; flex-direction: column; gap: .75rem; }
+  .plot-chart-wrap { background: #f8fafc; border-radius: 6px; overflow: hidden; }
+  .plot-chart-label {
+    font-size: .7rem; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .06em;
+    padding: .4rem .75rem .0rem;
+  }
+</style>
+
+<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem;">
+  <h2 style="margin:0;">Tracked Locations</h2>
+  <button class="btn btn-primary" onclick="openModal()">+ Add Location</button>
+</div>
+
+{% if location_data %}
+  {% for item in location_data %}
+  {% set loc = item.location %}
+  {% set n = item.all_dates | length %}
+  <div class="card gap">
+
+    <div class="loc-header">
+      <h2>{{ loc.name }}</h2>
+      <span style="font-size:.75rem; color:var(--muted);">
+        {{ '%.4f'|format(loc.latitude) }}°, {{ '%.4f'|format(loc.longitude) }}°
+      </span>
+      <div class="loc-actions">
+        <button class="btn btn-outline btn-sm" id="plotbtn-{{ loc.id }}"
+                onclick="togglePlot({{ loc.id }})">📈 Plot</button>
+        <a href="{{ url_for('location_plot', location_id=loc.id) }}" class="btn btn-outline btn-sm">Evolution →</a>
+        <form method="post" action="{{ url_for('refresh_location', location_id=loc.id) }}" style="display:contents;">
+          <button class="btn btn-outline btn-sm">↻</button>
+        </form>
+        <form method="post" action="{{ url_for('delete_location', location_id=loc.id) }}"
+              onsubmit="return confirm('Remove {{ loc.name }}?')" style="display:contents;">
+          <button class="btn btn-danger btn-sm">✕</button>
+        </form>
+      </div>
+    </div>
+
+    {# ── grid view ── #}
+    <div id="rows-{{ loc.id }}">
+      {% if item.all_dates %}
+        {% for row in item.rows %}
+        <div class="provider-row">
+          <div class="provider-label">
+            {{ provider_labels.get(row.provider, row.provider) }}
+            {% if row.fetched_at %}
+            <span class="fetched">polled {{ row.fetched_at|dt }} UTC</span>
+            {% endif %}
+          </div>
+          <div class="day-grid" style="grid-template-columns: repeat({{ n }}, minmax(0, 1fr));">
+            {% for d in item.all_dates %}
+            {% set e = row.by_date.get(d) %}
+            {% if e %}
+            {% set evo_url = url_for('location_plot', location_id=loc.id, date=d, providers=row.provider) %}
+            <a class="day-cell" href="{{ evo_url }}" title="View forecast evolution for {{ d }}">
+              <div class="dc-date">{{ d[8:] }}.{{ d[5:7] }}.</div>
+              {% if e.icon_url %}
+              <img class="dc-icon" src="{{ e.icon_url }}" alt="{{ e.condition_text or '' }}"
+                   onerror="this.style.display='none'" title="{{ e.condition_text or '' }}">
+              {% else %}
+              <div style="height:34px;"></div>
+              {% endif %}
+              <div class="dc-temps">
+                {% if e.temp_max is not none %}<span class="dc-max">{{ e.temp_max }}°</span>{% endif %}
+                {% if e.temp_min is not none %}<span class="dc-min">/{{ e.temp_min }}°</span>{% endif %}
+                {% if e.temp_max is none and e.temp_min is none %}—{% endif %}
+              </div>
+              {% if e.precip_probability is not none %}
+              <div class="dc-precip">💧{{ e.precip_probability }}%</div>
+              {% endif %}
+            </a>
+            {% else %}
+            <div class="day-cell empty"></div>
+            {% endif %}
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <div style="color:var(--muted); font-size:.875rem; padding:.5rem 0;">No forecast data yet.</div>
+      {% endif %}
+    </div>
+
+    {# ── plot view ── #}
+    <div class="forecast-plot" id="plot-{{ loc.id }}">
+      <div class="plot-charts" id="plot-charts-{{ loc.id }}"></div>
+    </div>
+
+  </div>
+
+  {# embed forecast data for JS #}
+  <script>
+  window.__loc = window.__loc || {};
+  window.__loc[{{ loc.id }}] = {
+    dates: {{ item.all_dates | tojson }},
+    rows: [
+      {% for row in item.rows %}
+      {
+        provider: {{ row.provider | tojson }},
+        label: {{ provider_labels.get(row.provider, row.provider) | tojson }},
+        byDate: {{ row.by_date | tojson }}
+      }{% if not loop.last %},{% endif %}
+      {% endfor %}
+    ]
+  };
+  </script>
+
+  {% endfor %}
+
+{% else %}
+<div class="empty-state">
+  <div class="icon">🌍</div>
+  <p style="font-size:1.1rem; font-weight:600; margin-bottom:.5rem;">No locations tracked yet</p>
+  <p style="margin-bottom:1.5rem;">Add a location to start archiving its weather forecast.</p>
+  <button class="btn btn-primary" onclick="openModal()">+ Add your first location</button>
+</div>
+{% endif %}
+
+
+<!-- Add Location Modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal" style="max-width:540px; max-height:90vh; overflow-y:auto;">
+    <h2>Add Location</h2>
+    <div style="margin-bottom:1rem;">
+      <label style="font-size:.8rem; font-weight:600; color:var(--muted); display:block; margin-bottom:.3rem;">
+        LOCATION NAME
+      </label>
+      <input type="text" id="locationName" class="search-input"
+             placeholder="e.g. Berlin" autocomplete="off" oninput="updateSubmitBtn()">
+    </div>
+    {% for p in all_providers %}
+    <div class="provider-section" style="border:1px solid var(--border); border-radius:8px; padding:.85rem; margin-bottom:.75rem;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:.6rem;">
+        <span style="font-size:.8rem; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.05em;">
+          {{ p.display_name }}
+        </span>
+        <span class="badge" id="badge-{{ p.name }}" style="display:none; background:#dcfce7; color:#166534;">✓ selected</span>
+      </div>
+      <input type="text" class="search-input" id="search-{{ p.name }}"
+             placeholder="Search city in {{ p.display_name }}…"
+             autocomplete="off" data-provider="{{ p.name }}"
+             oninput="handleSearchInput(this)"
+             style="font-size:.85rem; padding:.45rem .7rem;">
+      <div class="search-results" id="results-{{ p.name }}" style="font-size:.85rem;"></div>
+      <div id="selected-{{ p.name }}" style="display:none; margin-top:.6rem; padding:.5rem .75rem;
+           background:#f0f7ff; border-radius:6px; font-size:.85rem; border:1px solid #bfdbfe;
+           align-items:center; justify-content:space-between;">
+        <strong id="selected-label-{{ p.name }}"></strong>
+        <button type="button" onclick="clearProvider('{{ p.name }}')"
+                style="background:none; border:none; cursor:pointer; color:var(--muted); font-size:1rem; line-height:1;">×</button>
+      </div>
+    </div>
+    {% endfor %}
+    <form method="post" action="{{ url_for('add_location') }}" id="addForm" onsubmit="injectFormFields()">
+      <input type="hidden" name="name"      id="f_name">
+      <input type="hidden" name="latitude"  id="f_lat">
+      <input type="hidden" name="longitude" id="f_lon">
+      <div class="modal-footer" style="margin-top:.5rem;">
+        <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="addBtn" disabled>Add Location</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── modal ──────────────────────────────────────────────────────────────────
+const providerSelections = {};
+const debounceTimers = {};
+
+function openModal() {
+  document.getElementById('modal').classList.add('open');
+  document.getElementById('locationName').focus();
+}
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+  document.getElementById('locationName').value = '';
+  {% for p in all_providers %}
+  clearProvider('{{ p.name }}');
+  document.getElementById('search-{{ p.name }}').value = '';
+  {% endfor %}
+  updateSubmitBtn();
+}
+document.getElementById('modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+function handleSearchInput(input) {
+  const provider = input.dataset.provider;
+  clearTimeout(debounceTimers[provider]);
+  const q = input.value.trim();
+  const box = document.getElementById('results-' + provider);
+  if (q.length < 2) { box.classList.remove('visible'); return; }
+  debounceTimers[provider] = setTimeout(() => fetchResults(provider, q), 300);
+}
+function fetchResults(provider, q) {
+  fetch('/search?q=' + encodeURIComponent(q) + '&provider=' + encodeURIComponent(provider))
+    .then(r => r.json())
+    .then(data => {
+      const box = document.getElementById('results-' + provider);
+      if (!data.length) { box.classList.remove('visible'); return; }
+      box.innerHTML = data.map(item => `
+        <div class="search-result-item" onclick='selectItem(${JSON.stringify(provider)}, ${JSON.stringify(item)})'>
+          <div class="city-name">${item.name}</div>
+          <div class="city-meta">${item.extra.title || item.name}</div>
+        </div>`).join('');
+      box.classList.add('visible');
+    });
+}
+function selectItem(provider, item) {
+  providerSelections[provider] = item;
+  const nameInput = document.getElementById('locationName');
+  if (!nameInput.value.trim()) nameInput.value = item.name;
+  document.getElementById('selected-label-' + provider).textContent = item.extra.title || item.name;
+  document.getElementById('selected-' + provider).style.display = 'flex';
+  document.getElementById('badge-' + provider).style.display = '';
+  document.getElementById('results-' + provider).classList.remove('visible');
+  document.getElementById('search-' + provider).value = '';
+  if (!document.getElementById('f_lat').value) {
+    document.getElementById('f_lat').value = item.latitude || 0;
+    document.getElementById('f_lon').value = item.longitude || 0;
+  }
+  updateSubmitBtn();
+}
+function clearProvider(provider) {
+  delete providerSelections[provider];
+  document.getElementById('selected-' + provider).style.display = 'none';
+  document.getElementById('badge-' + provider).style.display = 'none';
+  updateSubmitBtn();
+}
+function updateSubmitBtn() {
+  const hasName = document.getElementById('locationName').value.trim().length > 0;
+  const hasProvider = Object.keys(providerSelections).length > 0;
+  document.getElementById('addBtn').disabled = !(hasName && hasProvider);
+}
+function injectFormFields() {
+  document.getElementById('f_name').value = document.getElementById('locationName').value.trim();
+  document.querySelectorAll('.dynamic-provider-field').forEach(el => el.remove());
+  const form = document.getElementById('addForm');
+  for (const [provider, item] of Object.entries(providerSelections)) {
+    const add = (name, value) => {
+      const el = document.createElement('input');
+      el.type = 'hidden'; el.name = name; el.value = value;
+      el.className = 'dynamic-provider-field';
+      form.appendChild(el);
+    };
+    add('provider', provider);
+    add('provider_location_id', item.provider_location_id);
+    add('metadata', JSON.stringify(item.extra || {}));
+  }
+}
+
+// ── plot toggle ────────────────────────────────────────────────────────────
+const PROVIDER_COLORS = {
+  wetter_com: { r:59,  g:130, b:246 },
+  meteoblue:  { r:34,  g:197, b:94  },
+};
+const DEFAULT_COLOR =   { r:168, g:85,  b:247 };
+const plotRendered = {};
+
+function rgba(provider, a) {
+  const c = PROVIDER_COLORS[provider] || DEFAULT_COLOR;
+  return `rgba(${c.r},${c.g},${c.b},${a})`;
+}
+
+function togglePlot(locId) {
+  const rowsEl  = document.getElementById('rows-' + locId);
+  const plotEl  = document.getElementById('plot-' + locId);
+  const btn     = document.getElementById('plotbtn-' + locId);
+  const showing = plotEl.classList.contains('visible');
+
+  if (showing) {
+    plotEl.classList.remove('visible');
+    rowsEl.style.display = '';
+    btn.textContent = '📈 Plot';
+  } else {
+    rowsEl.style.display = 'none';
+    plotEl.classList.add('visible');
+    btn.textContent = '📋 Table';
+    if (!plotRendered[locId]) {
+      renderPlot(locId);
+      plotRendered[locId] = true;
+    }
+  }
+}
+
+function renderPlot(locId) {
+  const loc = window.__loc[locId];
+  if (!loc) return;
+
+  const container = document.getElementById('plot-charts-' + locId);
+  const dates = loc.dates;
+
+  // Define which metrics to attempt, in order
+  const metrics = [
+    {
+      id: 'temp', label: 'Temperature °C',
+      render: (rows) => buildTempTraces(rows, dates),
+    },
+    {
+      id: 'precip_prob', label: 'Precipitation probability %',
+      field: 'precip_probability',
+    },
+    {
+      id: 'precip_amt', label: 'Precipitation mm',
+      field: 'precip_amount',
+    },
+    {
+      id: 'wind', label: 'Wind speed km/h',
+      field: 'wind_speed',
+    },
+  ];
+
+  const plotDivs = [];
+
+  for (const metric of metrics) {
+    let traces;
+    if (metric.render) {
+      traces = metric.render(loc.rows);
+    } else {
+      traces = buildSimpleTraces(loc.rows, dates, metric.field);
+    }
+    if (!traces.length) continue;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'plot-chart-wrap';
+
+    const lbl = document.createElement('div');
+    lbl.className = 'plot-chart-label';
+    lbl.textContent = metric.label;
+    wrap.appendChild(lbl);
+
+    const div = document.createElement('div');
+    div.id = 'pc-' + locId + '-' + metric.id;
+    div.style.height = '200px';
+    wrap.appendChild(div);
+    container.appendChild(wrap);
+    plotDivs.push(div.id);
+
+    const layout = {
+      margin: { t: 8, b: 50, l: 50, r: 12 },
+      xaxis: { type: 'date', tickformat: '%d.%m', gridcolor: '#e2e8f0' },
+      yaxis: { gridcolor: '#e2e8f0', zeroline: false },
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor: '#f8fafc',
+      legend: { orientation: 'h', yanchor: 'top', y: -0.22, xanchor: 'left', x: 0 },
+      hovermode: 'x unified',
+      font: { family: 'system-ui,-apple-system,sans-serif', size: 11 },
+    };
+
+    Plotly.newPlot(div.id, traces, layout, { responsive: true, displayModeBar: false });
+  }
+
+  // Sync x-axes across charts
+  for (const id of plotDivs) {
+    document.getElementById(id).on('plotly_relayout', ev => {
+      const upd = {};
+      if (ev['xaxis.range[0]'] !== undefined) {
+        upd['xaxis.range[0]'] = ev['xaxis.range[0]'];
+        upd['xaxis.range[1]'] = ev['xaxis.range[1]'];
+      } else if (ev['xaxis.autorange']) {
+        upd['xaxis.autorange'] = true;
+      }
+      if (!Object.keys(upd).length) return;
+      for (const oid of plotDivs) {
+        if (oid !== id) Plotly.relayout(oid, upd);
+      }
+    });
+  }
+}
+
+function buildSimpleTraces(rows, dates, field) {
+  const traces = [];
+  for (const row of rows) {
+    const ys = dates.map(d => row.byDate[d]?.[field] ?? null);
+    if (ys.every(v => v === null)) continue;
+    traces.push({
+      x: dates, y: ys,
+      type: 'scatter', mode: 'lines+markers',
+      name: row.label,
+      line: { color: rgba(row.provider, 1), width: 2 },
+      marker: { size: 5, color: rgba(row.provider, 1) },
+      connectgaps: false,
+    });
+  }
+  return traces;
+}
+
+function buildTempTraces(rows, dates) {
+  const traces = [];
+  for (const row of rows) {
+    const ymx = dates.map(d => row.byDate[d]?.temp_max ?? null);
+    const ymn = dates.map(d => row.byDate[d]?.temp_min ?? null);
+    const hasMx = ymx.some(v => v !== null);
+    const hasMn = ymn.some(v => v !== null);
+    if (!hasMx && !hasMn) continue;
+
+    const fill = rgba(row.provider, 0.15);
+    const line = rgba(row.provider, 1);
+
+    if (hasMx && hasMn) {
+      traces.push({
+        x: dates, y: ymx, type: 'scatter', mode: 'lines',
+        line: { width: 0 }, showlegend: false, hoverinfo: 'skip',
+        name: row.label, legendgroup: row.label,
+      });
+      traces.push({
+        x: dates, y: ymn, type: 'scatter', mode: 'lines',
+        fill: 'tonexty', fillcolor: fill,
+        line: { width: 0 }, showlegend: false, hoverinfo: 'skip',
+        name: row.label, legendgroup: row.label,
+      });
+    }
+
+    const centre = dates.map((d, i) => {
+      const mx = ymx[i], mn = ymn[i];
+      if (mx !== null && mn !== null) return (mx + mn) / 2;
+      return mx ?? mn;
+    });
+
+    traces.push({
+      x: dates, y: centre, type: 'scatter', mode: 'lines+markers',
+      name: row.label, legendgroup: row.label,
+      line: { color: line, width: 2 },
+      marker: { size: 5, color: line },
+      connectgaps: false,
+    });
+  }
+  return traces;
+}
+</script>
+
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+{% endblock %}

@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}DB Browser{% endblock %}
+
+{% block content %}
+<style>
+  /* allow the db table to use the full main width */
+  main { max-width: none; }
+
+  .db-tabs { display:flex; gap:.35rem; flex-wrap:wrap; margin-bottom:1.25rem; }
+  .db-tab { padding:.35rem .85rem; border-radius:6px; text-decoration:none; font-size:.85rem;
+            font-weight:500; color:var(--muted); background:var(--surface);
+            border:1px solid var(--border); transition:background .1s; }
+  .db-tab:hover { background:#f0f7ff; color:var(--primary); }
+  .db-tab.active { background:var(--primary); color:#fff; border-color:var(--primary); }
+  .db-tab .count { font-size:.72rem; opacity:.75; margin-left:.3rem; }
+
+  .db-card { background:var(--surface); border:1px solid var(--border);
+             border-radius:var(--radius); box-shadow:var(--shadow); padding:1.25rem; }
+
+  .filter-bar { display:flex; flex-wrap:wrap; gap:.5rem; margin-bottom:1rem; align-items:flex-end; }
+  .filter-group { display:flex; flex-direction:column; }
+  .filter-group label { font-size:.7rem; color:var(--muted); margin-bottom:.2rem; }
+  .filter-group input { padding:.35rem .55rem; border:1px solid var(--border); border-radius:6px;
+                        font-size:.78rem; width:120px; }
+  .filter-group input:focus { outline:none; border-color:var(--primary); }
+
+  .table-wrap { overflow-x:auto; }
+  .data-table { width:100%; border-collapse:collapse; font-size:.78rem; white-space:nowrap; }
+  .data-table th { background:var(--bg); font-weight:600; text-align:left;
+                   padding:.45rem .7rem; border-bottom:2px solid var(--border);
+                   position:sticky; top:0; z-index:1; }
+  .data-table td { padding:.38rem .7rem; border-bottom:1px solid var(--border);
+                   max-width:280px; overflow:hidden; text-overflow:ellipsis; }
+  .data-table tr:last-child td { border-bottom:none; }
+  .data-table tr:hover td { background:#f7fafd; }
+  .data-table td.null { color:var(--muted); font-style:italic; }
+  .data-table td.num { font-variant-numeric:tabular-nums; text-align:right; }
+
+  .pagination { display:flex; gap:.5rem; align-items:center; margin-top:1rem; font-size:.85rem; }
+  .pagination a { padding:.3rem .65rem; border:1px solid var(--border); border-radius:6px;
+                  text-decoration:none; color:var(--primary); background:var(--surface); }
+  .pagination a:hover { background:#f0f7ff; }
+  .pagination .info { color:var(--muted); flex:1; }
+</style>
+
+{# ── table tabs ── #}
+<div class="db-tabs">
+  <a href="{{ url_for('db_overview') }}"
+     class="db-tab {% if active_table is none %}active{% endif %}">Overview</a>
+  {% for t in tables %}
+  <a href="{{ url_for('db_table', table=t.name) }}"
+     class="db-tab {% if t.name == active_table %}active{% endif %}">
+    {{ t.name }}<span class="count">{{ '{:,}'.format(t.count) }}</span>
+  </a>
+  {% endfor %}
+</div>
+
+{% if active_table is none %}
+{# ── overview ── #}
+<div class="db-card" style="max-width:720px;">
+  {% for t in tables %}
+  <div style="display:flex; justify-content:space-between; align-items:center;
+              padding:.65rem 0; border-bottom:1px solid var(--border);">
+    <div>
+      <a href="{{ url_for('db_table', table=t.name) }}"
+         style="font-weight:600; color:var(--primary); text-decoration:none;">{{ t.name }}</a>
+      <div style="font-size:.73rem; color:var(--muted); margin-top:.15rem;">
+        {{ t.cols|join(' &nbsp;·&nbsp; ')|safe }}
+      </div>
+    </div>
+    <span class="badge badge-blue">{{ '{:,}'.format(t.count) }} rows</span>
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+{# ── table view ── #}
+<div class="db-card">
+  <div style="display:flex; align-items:baseline; gap:1rem; margin-bottom:.85rem; flex-wrap:wrap;">
+    <span style="font-size:.82rem; color:var(--muted);">
+      {% if filtered_total != total %}
+        {{ '{:,}'.format(filtered_total) }} of {{ '{:,}'.format(total) }} rows match
+      {% else %}
+        {{ '{:,}'.format(total) }} rows
+      {% endif %}
+    </span>
+    {% if filters %}
+    <a href="{{ url_for('db_table', table=active_table) }}"
+       style="font-size:.78rem; color:var(--danger); text-decoration:none; margin-left:auto;">
+      ✕ clear filters
+    </a>
+    {% endif %}
+  </div>
+
+  {# filter bar #}
+  <form method="get" class="filter-bar">
+    {% for col in cols %}
+    <div class="filter-group">
+      <label>{{ col }}</label>
+      <input type="text" name="{{ col }}" value="{{ filters.get(col, '') }}" placeholder="filter…">
+    </div>
+    {% endfor %}
+    <button type="submit" class="btn btn-primary btn-sm" style="align-self:flex-end;">Filter</button>
+  </form>
+
+  {% if rows %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>{% for col in cols %}<th>{{ col }}</th>{% endfor %}</tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          {% for val in row %}
+          {% if val is none %}
+          <td class="null">null</td>
+          {% elif val is number %}
+          <td class="num">{{ val }}</td>
+          {% else %}
+          <td title="{{ val }}">{{ val }}</td>
+          {% endif %}
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% set total_pages = ((filtered_total - 1) // page_size + 1) if filtered_total else 1 %}
+  {% if total_pages > 1 %}
+  <div class="pagination">
+    {% if page > 0 %}
+    <a href="{{ url_for('db_table', table=active_table, page=page-1, **filters) }}">← Prev</a>
+    {% endif %}
+    <span class="info">
+      Page {{ page + 1 }} / {{ total_pages }}
+      &nbsp;·&nbsp; rows {{ page * page_size + 1 }}–{{ [((page+1) * page_size), filtered_total]|min }}
+    </span>
+    {% if (page + 1) * page_size < filtered_total %}
+    <a href="{{ url_for('db_table', table=active_table, page=page+1, **filters) }}">Next →</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% else %}
+  <div style="text-align:center; padding:2rem; color:var(--muted);">
+    No rows match the current filters.
+  </div>
+  {% endif %}
+
+</div>
+{% endif %}
+
+{% endblock %}
