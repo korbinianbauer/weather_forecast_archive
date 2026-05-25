@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Login — Weather Archive{% endblock %}
+
+{% block content %}
+<div style="max-width:360px; margin:4rem auto;">
+  <div class="card">
+    <h2 style="margin-bottom:1.25rem;">Sign in</h2>
+    {% if error %}
+    <div style="background:#fef2f2; border:1px solid #fca5a5; color:#b91c1c;
+                border-radius:6px; padding:.65rem .9rem; margin-bottom:1rem; font-size:.875rem;">
+      {{ error }}
+    </div>
+    {% endif %}
+    <form method="post" action="{{ url_for('login', next=request.args.get('next', '')) }}">
+      <div style="margin-bottom:.85rem;">
+        <label style="display:block; font-size:.8rem; font-weight:600; color:var(--muted); margin-bottom:.3rem;">
+          USERNAME
+        </label>
+        <input type="text" name="username" autofocus autocomplete="username"
+               class="search-input" style="font-size:.9rem;">
+      </div>
+      <div style="margin-bottom:1.25rem;">
+        <label style="display:block; font-size:.8rem; font-weight:600; color:var(--muted); margin-bottom:.3rem;">
+          PASSWORD
+        </label>
+        <input type="password" name="password" autocomplete="current-password"
+               class="search-input" style="font-size:.9rem;">
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center;">
+        Sign in
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}

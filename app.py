@@ -1,10 +1,13 @@
 import json
 import logging
+import os
+import secrets
 from datetime import datetime
+from functools import wraps
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from flask import Flask, jsonify, redirect, render_template, request, url_for
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
 import db
 import providers
@@ -13,7 +16,49 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
+
+_ADMIN_USER = os.environ.get('BETHER_USER', 'admin')
+_ADMIN_PASSWORD = os.environ.get('BETHER_PASSWORD', '')
+if not _ADMIN_PASSWORD:
+    _ADMIN_PASSWORD = secrets.token_urlsafe(12)
+    logger.warning('BETHER_PASSWORD not set — using generated password: %s', _ADMIN_PASSWORD)
+
 db.init_db()
+
+
+# ── auth ──────────────────────────────────────────────────────────────────────
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('logged_in'):
+            return redirect(url_for('login', next=request.path))
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    error = None
+    if request.method == 'POST':
+        u = request.form.get('username', '')
+        p = request.form.get('password', '')
+        if u == _ADMIN_USER and p == _ADMIN_PASSWORD:
+            session['logged_in'] = True
+            next_url = request.args.get('next') or url_for('index')
+            # guard against open-redirect
+            if not next_url.startswith('/'):
+                next_url = url_for('index')
+            return redirect(next_url)
+        error = 'Invalid username or password.'
+    return render_template('login.html', error=error)
+
+
+@app.route('/logout', methods=['POST'])
+def logout():
+    session.clear()
+    return redirect(url_for('index'))
 
 
 # ── polling ───────────────────────────────────────────────────────────────────
@@ -128,6 +173,7 @@ def search():
 
 
 @app.route('/add', methods=['POST'])
+@login_required
 def add_location():
     name = request.form.get('name', '').strip()
     latitude = float(request.form.get('latitude') or 0)
@@ -307,6 +353,7 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
 
 
 @app.route('/location/<int:location_id>/add_source', methods=['POST'])
+@login_required
 def add_location_source_route(location_id):
     location = db.get_location(location_id)
     if not location:
@@ -335,6 +382,7 @@ def add_location_source_route(location_id):
 
 
 @app.route('/location/<int:location_id>/refresh', methods=['POST'])
+@login_required
 def refresh_location(location_id):
     for source in db.get_location_sources(location_id):
         try:
@@ -345,6 +393,7 @@ def refresh_location(location_id):
 
 
 @app.route('/location/<int:location_id>/delete', methods=['POST'])
+@login_required
 def delete_location(location_id):
     db.delete_location(location_id)
     return redirect(url_for('index'))

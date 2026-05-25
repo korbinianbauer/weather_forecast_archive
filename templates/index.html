@@ -50,7 +50,9 @@
 
 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem;">
   <h2 style="margin:0;">Tracked Locations</h2>
+  {% if session.logged_in %}
   <button class="btn btn-primary" onclick="openModal()">+ Add Location</button>
+  {% endif %}
 </div>
 
 {% if location_data %}
@@ -67,6 +69,7 @@
       <div class="loc-actions">
         <button class="btn btn-outline btn-sm" id="plotbtn-{{ loc.id }}"
                 onclick="togglePlot({{ loc.id }})">📈 Plot</button>
+        {% if session.logged_in %}
         <form method="post" action="{{ url_for('refresh_location', location_id=loc.id) }}" style="display:contents;">
           <button class="btn btn-outline btn-sm">↻</button>
         </form>
@@ -74,6 +77,7 @@
               onsubmit="return confirm('Remove {{ loc.name }}?')" style="display:contents;">
           <button class="btn btn-danger btn-sm">✕</button>
         </form>
+        {% endif %}
       </div>
     </div>
 
@@ -158,6 +162,7 @@
 {% endif %}
 
 
+{% if session.logged_in %}
 <!-- Add Location Modal -->
 <div class="modal-overlay" id="modal">
   <div class="modal" style="max-width:540px; max-height:90vh; overflow-y:auto;">
@@ -203,6 +208,7 @@
     </form>
   </div>
 </div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
