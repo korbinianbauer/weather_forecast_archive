@@ -73,6 +73,14 @@
   const tracesAll = {{ traces_json|safe }};
   if (!tracesAll.length) return;
 
+  function utcToLocal(isoStr) {
+    const d = new Date(isoStr + 'Z');
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+  tracesAll.forEach(t => { if (Array.isArray(t.x)) t.x = t.x.map(utcToLocal); });
+  const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
   const METRIC_ORDER = [
     'temperature',
     'sunshine_hours',
@@ -137,7 +145,7 @@
       margin:      { t: 10, b: 80, l: 60, r: 20 },
       xaxis: {
         type: 'date',
-        title: { text: 'Poll timestamp (UTC)', standoff: 8 },
+        title: { text: 'Poll timestamp (' + tzName + ')', standoff: 8 },
         tickformat: '%d.%m %H:%M',
         gridcolor: '#e2e8f0',
       },
