@@ -213,6 +213,7 @@
 
 {% block scripts %}
 <script>
+{% if session.logged_in %}
 // ── modal ──────────────────────────────────────────────────────────────────
 const providerSelections = {};
 const debounceTimers = {};
@@ -297,6 +298,7 @@ function injectFormFields() {
     add('metadata', JSON.stringify(item.extra || {}));
   }
 }
+{% endif %}
 
 // ── plot toggle ────────────────────────────────────────────────────────────
 const PROVIDER_COLORS = {
