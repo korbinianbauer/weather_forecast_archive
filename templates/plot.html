@@ -22,7 +22,7 @@
       </label>
       <select name="date" id="dateSelect"
               style="padding:.45rem .7rem; border:1px solid var(--border); border-radius:6px; font-size:.875rem; background:var(--surface);"
-              onchange="this.form.submit()">
+              onchange="this.form.submit();">
         {% for d in available_dates %}
         <option value="{{ d }}" {% if d == target_date %}selected{% endif %}>{{ d }}</option>
         {% endfor %}
@@ -38,14 +38,14 @@
         <label style="display:flex; align-items:center; gap:.35rem; font-size:.875rem; cursor:pointer;">
           <input type="checkbox" name="providers" value="{{ p }}"
                  {% if p in selected_providers %}checked{% endif %}
-                 style="accent-color:var(--primary);">
+                 style="accent-color:var(--primary);"
+                 onchange="this.form.submit();">
           {{ provider_labels.get(p, p) }}
         </label>
         {% endfor %}
       </div>
     </div>
 
-    <button type="submit" class="btn btn-primary btn-sm">Update</button>
   </form>
 
   {% if target_date %}

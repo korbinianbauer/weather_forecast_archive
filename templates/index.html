@@ -67,7 +67,6 @@
       <div class="loc-actions">
         <button class="btn btn-outline btn-sm" id="plotbtn-{{ loc.id }}"
                 onclick="togglePlot({{ loc.id }})">📈 Plot</button>
-        <a href="{{ url_for('location_plot', location_id=loc.id) }}" class="btn btn-outline btn-sm">Evolution →</a>
         <form method="post" action="{{ url_for('refresh_location', location_id=loc.id) }}" style="display:contents;">
           <button class="btn btn-outline btn-sm">↻</button>
         </form>
