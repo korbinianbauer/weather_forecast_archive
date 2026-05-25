@@ -67,10 +67,21 @@ def _parse_daily(html: str) -> list[ForecastEntry]:
     soup = BeautifulSoup(html, 'html.parser')
     rows = soup.find_all('div', class_='swg-row-wrapper', attrs={'data-grid-child': True})
     today = date.today()
+
+    # Build sunshine-hours lookup: data-grid-child index → hours float
+    sun_by_idx: dict[str, Optional[float]] = {}
+    for astro in soup.find_all('div', class_='astronomy-strip', attrs={'data-grid-parent': True}):
+        idx = astro.get('data-grid-parent')
+        sun_span = astro.find('span', class_='icon-sun_hours')
+        if sun_span:
+            val_span = sun_span.find_next_sibling('span')
+            if val_span:
+                sun_by_idx[idx] = _float(val_span)
+
     result = []
     for row in rows:
         try:
-            entry = _parse_daily_row(row, today)
+            entry = _parse_daily_row(row, today, sun_by_idx)
             if entry and entry.forecast_time:
                 result.append(entry)
         except Exception as e:
@@ -78,7 +89,8 @@ def _parse_daily(html: str) -> list[ForecastEntry]:
     return result
 
 
-def _parse_daily_row(row, ref: date) -> ForecastEntry:
+def _parse_daily_row(row, ref: date, sun_by_idx: dict) -> ForecastEntry:
+    idx = row.get('data-grid-child')
     period = row.find('div', class_='swg-col-period')
     forecast_date = _parse_date(period.get_text(strip=True) if period else '', ref)
     forecast_time = f'{forecast_date}T00:00:00' if forecast_date else ''
@@ -117,6 +129,7 @@ def _parse_daily_row(row, ref: date) -> ForecastEntry:
         precip_amount=_float(row.find('div', class_='swg-col-wv2')),
         wind_direction=wind_dir,
         wind_speed=_int(row.find('div', class_='swg-col-wv3')),
+        sunshine_hours=sun_by_idx.get(idx),
     )
 
 

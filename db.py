@@ -26,6 +26,7 @@ _SNAPSHOT_DDL = '''
         precip_amount        REAL,
         wind_direction       TEXT,
         wind_speed           INTEGER,
+        sunshine_hours       REAL,
         cloud_cover          INTEGER,
         pressure             REAL,
         humidity             INTEGER
@@ -75,6 +76,16 @@ def init_db():
             conn.executescript(_SNAPSHOT_DDL + '; ' + _SNAPSHOT_INDEX_DDL)
         else:
             _migrate_forecast_time(conn)
+            _add_columns_if_missing(conn, 'forecast_snapshots', {
+                'sunshine_hours': 'REAL',
+            })
+
+
+def _add_columns_if_missing(conn, table: str, columns: dict[str, str]):
+    existing = {row[1] for row in conn.execute(f'PRAGMA table_info({table})')}
+    for col, typedef in columns.items():
+        if col not in existing:
+            conn.execute(f'ALTER TABLE {table} ADD COLUMN {col} {typedef}')
 
 
 def _migrate_forecast_time(conn):
@@ -208,8 +219,9 @@ def save_forecast_batch(
                 temperature, temp_max, temp_min,
                 precip_probability, precip_amount,
                 wind_direction, wind_speed,
+                sunshine_hours,
                 cloud_cover, pressure, humidity)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
             [
                 (
                     location_id, provider, e.granularity, fetched_at,
@@ -218,6 +230,7 @@ def save_forecast_batch(
                     e.temperature, e.temp_max, e.temp_min,
                     e.precip_probability, e.precip_amount,
                     e.wind_direction, e.wind_speed,
+                    e.sunshine_hours,
                     e.cloud_cover, e.pressure, e.humidity,
                 )
                 for e in entries

@@ -24,6 +24,7 @@ class ForecastEntry:
     precip_amount: Optional[float] = None       # mm
     wind_direction: Optional[str] = None
     wind_speed: Optional[int] = None            # km/h
+    sunshine_hours: Optional[float] = None      # h
     cloud_cover: Optional[int] = None           # %
     pressure: Optional[float] = None            # hPa
     humidity: Optional[int] = None              # %

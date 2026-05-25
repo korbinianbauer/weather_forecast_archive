@@ -221,6 +221,7 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
         groups[key].sort(key=lambda r: r['fetched_at'])
 
     simple_metrics = [
+        ('sunshine_hours',     'sunshine_hours'),
         ('precip_probability', 'precipitation_precip_probability'),
         ('precip_amount',      'precipitation_precip_amount'),
         ('wind_speed',         'wind_wind_speed'),
@@ -245,43 +246,42 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
         has_min = any(v is not None for v in ymn)
         has_t   = any(v is not None for v in yt)
 
-        if has_max or has_min or has_t:
-            if has_max and has_min:
-                all_traces.append({
-                    'x': xs, 'y': ymx,
-                    'type': 'scatter', 'mode': 'lines',
-                    'line': {'width': 0}, 'showlegend': False,
-                    'hoverinfo': 'skip', 'metric': 'temperature',
-                    'legendgroup': label,
-                })
-                all_traces.append({
-                    'x': xs, 'y': ymn,
-                    'type': 'scatter', 'mode': 'lines',
-                    'fill': 'tonexty', 'fillcolor': fill_color,
-                    'line': {'width': 0}, 'showlegend': False,
-                    'hoverinfo': 'skip', 'metric': 'temperature',
-                    'legendgroup': label,
-                })
+        if has_max and has_min:
+            all_traces.append({
+                'x': xs, 'y': ymx,
+                'type': 'scatter', 'mode': 'lines',
+                'line': {'width': 0}, 'showlegend': False,
+                'hoverinfo': 'skip', 'metric': 'temperature',
+                'legendgroup': label,
+            })
+            all_traces.append({
+                'x': xs, 'y': ymn,
+                'type': 'scatter', 'mode': 'lines',
+                'fill': 'tonexty', 'fillcolor': fill_color,
+                'line': {'width': 0}, 'showlegend': False,
+                'hoverinfo': 'skip', 'metric': 'temperature',
+                'legendgroup': label,
+            })
 
-            if has_t:
-                centre = yt
-            else:
-                centre = []
-                for mx, mn in zip(ymx, ymn):
-                    if mx is not None and mn is not None:
-                        centre.append((mx + mn) / 2)
-                    elif mx is not None:
-                        centre.append(mx)
-                    elif mn is not None:
-                        centre.append(mn)
-                    else:
-                        centre.append(None)
-
+        if has_t:
             show = label not in legend_shown
             if show:
                 legend_shown.add(label)
             all_traces.append({
-                'x': xs, 'y': centre,
+                'x': xs, 'y': yt,
+                'type': 'scatter', 'mode': 'lines+markers',
+                'name': label, 'showlegend': show,
+                'line': {'color': color, 'width': 2},
+                'marker': {'size': 6, 'color': color},
+                'metric': 'temperature', 'legendgroup': label,
+            })
+        elif not (has_max or has_min):
+            # No temperature data at all — still emit an empty trace so the chart renders
+            show = label not in legend_shown
+            if show:
+                legend_shown.add(label)
+            all_traces.append({
+                'x': xs, 'y': [None] * len(xs),
                 'type': 'scatter', 'mode': 'lines+markers',
                 'name': label, 'showlegend': show,
                 'line': {'color': color, 'width': 2},
@@ -291,8 +291,6 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
 
         for field, metric_key in simple_metrics:
             ys = [e.get(field) for e in entries]
-            if not any(v is not None for v in ys):
-                continue
             show = label not in legend_shown
             if show:
                 legend_shown.add(label)

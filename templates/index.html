@@ -335,34 +335,19 @@ function renderPlot(locId) {
 
   // Define which metrics to attempt, in order
   const metrics = [
-    {
-      id: 'temp', label: 'Temperature °C',
-      render: (rows) => buildTempTraces(rows, dates),
-    },
-    {
-      id: 'precip_prob', label: 'Precipitation probability %',
-      field: 'precip_probability',
-    },
-    {
-      id: 'precip_amt', label: 'Precipitation mm',
-      field: 'precip_amount',
-    },
-    {
-      id: 'wind', label: 'Wind speed km/h',
-      field: 'wind_speed',
-    },
+    { id: 'temp',         label: 'Temperature °C',            render: (rows) => buildTempTraces(rows, dates) },
+    { id: 'sun',          label: 'Sunshine hours h',          field: 'sunshine_hours' },
+    { id: 'precip_prob',  label: 'Precipitation probability %', field: 'precip_probability' },
+    { id: 'precip_amt',   label: 'Precipitation mm',          field: 'precip_amount' },
+    { id: 'wind',         label: 'Wind speed km/h',           field: 'wind_speed' },
   ];
 
   const plotDivs = [];
 
   for (const metric of metrics) {
-    let traces;
-    if (metric.render) {
-      traces = metric.render(loc.rows);
-    } else {
-      traces = buildSimpleTraces(loc.rows, dates, metric.field);
-    }
-    if (!traces.length) continue;
+    const traces = metric.render
+      ? metric.render(loc.rows)
+      : buildSimpleTraces(loc.rows, dates, metric.field);
 
     const wrap = document.createElement('div');
     wrap.className = 'plot-chart-wrap';
@@ -433,9 +418,10 @@ function buildTempTraces(rows, dates) {
   for (const row of rows) {
     const ymx = dates.map(d => row.byDate[d]?.temp_max ?? null);
     const ymn = dates.map(d => row.byDate[d]?.temp_min ?? null);
+    const yt  = dates.map(d => row.byDate[d]?.temperature ?? null);
     const hasMx = ymx.some(v => v !== null);
     const hasMn = ymn.some(v => v !== null);
-    if (!hasMx && !hasMn) continue;
+    const hasT  = yt.some(v => v !== null);
 
     const fill = rgba(row.provider, 0.15);
     const line = rgba(row.provider, 1);
@@ -454,19 +440,23 @@ function buildTempTraces(rows, dates) {
       });
     }
 
-    const centre = dates.map((d, i) => {
-      const mx = ymx[i], mn = ymn[i];
-      if (mx !== null && mn !== null) return (mx + mn) / 2;
-      return mx ?? mn;
-    });
-
-    traces.push({
-      x: dates, y: centre, type: 'scatter', mode: 'lines+markers',
-      name: row.label, legendgroup: row.label,
-      line: { color: line, width: 2 },
-      marker: { size: 5, color: line },
-      connectgaps: false,
-    });
+    if (hasT) {
+      traces.push({
+        x: dates, y: yt, type: 'scatter', mode: 'lines+markers',
+        name: row.label, legendgroup: row.label,
+        line: { color: line, width: 2 },
+        marker: { size: 5, color: line },
+        connectgaps: false,
+      });
+    } else if (!hasMx && !hasMn) {
+      // No temperature data at all — emit empty trace so chart always renders
+      traces.push({
+        x: dates, y: dates.map(() => null), type: 'scatter', mode: 'lines+markers',
+        name: row.label, legendgroup: row.label,
+        line: { color: line, width: 2 },
+        marker: { size: 5, color: line },
+      });
+    }
   }
   return traces;
 }

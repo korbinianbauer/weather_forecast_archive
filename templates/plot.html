@@ -51,7 +51,6 @@
   {% if target_date %}
   <div style="margin-top:.75rem; font-size:.82rem; color:var(--muted);">
     Showing how the daily forecast for <strong>{{ target_date }}</strong> changed over time.
-    Each point is one archived poll; x-axis is when the poll was taken.
   </div>
   {% endif %}
 </div>
@@ -76,6 +75,7 @@
 
   const METRIC_ORDER = [
     'temperature',
+    'sunshine_hours',
     'precipitation_precip_probability',
     'precipitation_precip_amount',
     'wind_wind_speed',
@@ -85,6 +85,7 @@
   ];
   const METRIC_LABELS = {
     'temperature':                      'Temperature °C',
+    'sunshine_hours':                   'Sunshine hours h',
     'precipitation_precip_probability': 'Precip probability %',
     'precipitation_precip_amount':      'Precipitation mm',
     'wind_wind_speed':                  'Wind speed km/h',
@@ -93,11 +94,12 @@
     'humidity_humidity':                'Humidity %',
   };
 
-  const presentMetrics = METRIC_ORDER.filter(m => tracesAll.some(t => t.metric === m));
+  const metricsPresent = new Set(tracesAll.map(t => t.metric));
+  const allMetrics = METRIC_ORDER.filter(m => metricsPresent.has(m));
   const container = document.getElementById('charts-container');
   const divIds = [];
 
-  for (const metric of presentMetrics) {
+  for (const metric of allMetrics) {
     const wrapper = document.createElement('div');
     wrapper.className = 'card gap';
 
@@ -116,10 +118,10 @@
   }
 
   const isFirst = {};
-  for (const m of presentMetrics) isFirst[m] = true;
+  for (const m of allMetrics) isFirst[m] = true;
 
-  for (let mi = 0; mi < presentMetrics.length; mi++) {
-    const metric = presentMetrics[mi];
+  for (let mi = 0; mi < allMetrics.length; mi++) {
+    const metric = allMetrics[mi];
     const traces = tracesAll
       .filter(t => t.metric === metric)
       .map(t => {

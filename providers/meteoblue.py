@@ -105,6 +105,14 @@ def _parse_day_tab(tab) -> ForecastEntry:
     precip_el = tab.find(class_='tab-precip')
     precip_amount = _parse_precip(precip_el.get_text() if precip_el else '')
 
+    sunshine_hours: Optional[float] = None
+    sun_el = tab.find(class_='tab-sun')
+    if sun_el:
+        # Strip the glyph span, leaving just the text like "11 h"
+        for glyph in sun_el.find_all('span'):
+            glyph.decompose()
+        sunshine_hours = _parse_precip(sun_el.get_text())  # reuse float parser
+
     return ForecastEntry(
         forecast_time=forecast_time,
         granularity='daily',
@@ -115,6 +123,7 @@ def _parse_day_tab(tab) -> ForecastEntry:
         wind_direction=wind_direction,
         wind_speed=wind_speed,
         precip_amount=precip_amount,
+        sunshine_hours=sunshine_hours,
     )
 
 
