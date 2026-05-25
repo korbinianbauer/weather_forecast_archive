@@ -71,7 +71,7 @@ def _parse_daily(html: str) -> list[ForecastEntry]:
     for row in rows:
         try:
             entry = _parse_daily_row(row, today)
-            if entry and entry.forecast_date:
+            if entry and entry.forecast_time:
                 result.append(entry)
         except Exception as e:
             logger.warning('Row parse error: %s', e)
@@ -81,6 +81,7 @@ def _parse_daily(html: str) -> list[ForecastEntry]:
 def _parse_daily_row(row, ref: date) -> ForecastEntry:
     period = row.find('div', class_='swg-col-period')
     forecast_date = _parse_date(period.get_text(strip=True) if period else '', ref)
+    forecast_time = f'{forecast_date}T00:00:00' if forecast_date else ''
 
     icon_url: Optional[str] = None
     icon_div = row.find('div', class_='swg-col-icon')
@@ -106,9 +107,8 @@ def _parse_daily_row(row, ref: date) -> ForecastEntry:
     text_div = row.find('div', class_='swg-col-text')
 
     return ForecastEntry(
-        forecast_date=forecast_date,
+        forecast_time=forecast_time,
         granularity='daily',
-        forecast_hour=None,
         condition_text=(text_div.get_text(strip=True) if text_div else None) or None,
         icon_url=icon_url,
         temp_max=temp_max,

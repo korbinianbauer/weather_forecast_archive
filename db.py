@@ -8,6 +8,36 @@ DB_PATH = os.path.join(os.path.dirname(__file__), 'weather.db')
 
 # ── init / migration ──────────────────────────────────────────────────────────
 
+_SNAPSHOT_DDL = '''
+    CREATE TABLE forecast_snapshots (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        location_id          INTEGER NOT NULL
+                                 REFERENCES locations(id) ON DELETE CASCADE,
+        provider             TEXT NOT NULL,
+        granularity          TEXT NOT NULL DEFAULT 'daily',
+        fetched_at           TEXT NOT NULL,
+        forecast_time        TEXT NOT NULL,
+        condition_text       TEXT,
+        icon_url             TEXT,
+        temperature          REAL,
+        temp_max             REAL,
+        temp_min             REAL,
+        precip_probability   INTEGER,
+        precip_amount        REAL,
+        wind_direction       TEXT,
+        wind_speed           INTEGER,
+        cloud_cover          INTEGER,
+        pressure             REAL,
+        humidity             INTEGER
+    )
+'''
+
+_SNAPSHOT_INDEX_DDL = '''
+    CREATE INDEX IF NOT EXISTS idx_snap_loc_provider_gran
+        ON forecast_snapshots(location_id, provider, granularity, fetched_at, forecast_time)
+'''
+
+
 def init_db():
     with get_db() as conn:
         existing_tables = {
@@ -39,50 +69,44 @@ def init_db():
                 metadata             TEXT NOT NULL DEFAULT '{}',
                 UNIQUE(location_id, provider)
             );
-
-            CREATE TABLE IF NOT EXISTS forecast_snapshots (
-                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-                location_id          INTEGER NOT NULL
-                                         REFERENCES locations(id) ON DELETE CASCADE,
-                provider             TEXT NOT NULL,
-                granularity          TEXT NOT NULL DEFAULT 'daily',
-                fetched_at           TEXT NOT NULL,
-                forecast_date        TEXT NOT NULL,
-                forecast_hour        INTEGER,
-                condition_text       TEXT,
-                icon_url             TEXT,
-                temperature          REAL,
-                temp_max             REAL,
-                temp_min             REAL,
-                precip_probability   INTEGER,
-                precip_amount        REAL,
-                wind_direction       TEXT,
-                wind_speed           INTEGER,
-                cloud_cover          INTEGER,
-                pressure             REAL,
-                humidity             INTEGER
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_snap_loc_provider_gran
-                ON forecast_snapshots(location_id, provider, granularity, fetched_at, forecast_date);
         ''')
 
-        # Add columns introduced after initial deployment (idempotent)
-        _ensure_columns(conn, 'forecast_snapshots', {
-            'granularity':        "TEXT NOT NULL DEFAULT 'daily'",
-            'forecast_hour':      'INTEGER',
-            'temperature':        'REAL',
-            'cloud_cover':        'INTEGER',
-            'pressure':           'REAL',
-            'humidity':           'INTEGER',
-        })
+        if 'forecast_snapshots' not in existing_tables:
+            conn.executescript(_SNAPSHOT_DDL + '; ' + _SNAPSHOT_INDEX_DDL)
+        else:
+            _migrate_forecast_time(conn)
 
 
-def _ensure_columns(conn, table: str, columns: dict[str, str]):
-    existing = {row[1] for row in conn.execute(f'PRAGMA table_info({table})')}
-    for col, definition in columns.items():
-        if col not in existing:
-            conn.execute(f'ALTER TABLE {table} ADD COLUMN {col} {definition}')
+def _migrate_forecast_time(conn):
+    """Migrate forecast_date + forecast_hour → forecast_time, then drop old columns."""
+    cols = {row[1] for row in conn.execute('PRAGMA table_info(forecast_snapshots)')}
+    if 'forecast_date' not in cols:
+        return  # already on new schema
+
+    # Backfill forecast_time if the column exists but rows are unfilled
+    if 'forecast_time' not in cols:
+        conn.execute("ALTER TABLE forecast_snapshots ADD COLUMN forecast_time TEXT")
+    conn.execute("""
+        UPDATE forecast_snapshots
+        SET forecast_time = forecast_date || 'T' ||
+            printf('%02d', COALESCE(forecast_hour, 0)) || ':00:00'
+        WHERE forecast_time IS NULL
+    """)
+
+    # Rebuild table without forecast_date / forecast_hour
+    conn.executescript(f'''
+        CREATE TABLE forecast_snapshots_new {_SNAPSHOT_DDL.split("CREATE TABLE forecast_snapshots")[1]};
+        INSERT INTO forecast_snapshots_new
+            SELECT id, location_id, provider, granularity, fetched_at, forecast_time,
+                   condition_text, icon_url, temperature, temp_max, temp_min,
+                   precip_probability, precip_amount, wind_direction, wind_speed,
+                   cloud_cover, pressure, humidity
+            FROM forecast_snapshots
+            WHERE forecast_time IS NOT NULL;
+        DROP TABLE forecast_snapshots;
+        ALTER TABLE forecast_snapshots_new RENAME TO forecast_snapshots;
+        {_SNAPSHOT_INDEX_DDL};
+    ''')
 
 
 # ── connection ────────────────────────────────────────────────────────────────
@@ -179,17 +203,17 @@ def save_forecast_batch(
         conn.executemany(
             '''INSERT INTO forecast_snapshots
                (location_id, provider, granularity, fetched_at,
-                forecast_date, forecast_hour,
+                forecast_time,
                 condition_text, icon_url,
                 temperature, temp_max, temp_min,
                 precip_probability, precip_amount,
                 wind_direction, wind_speed,
                 cloud_cover, pressure, humidity)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
             [
                 (
                     location_id, provider, e.granularity, fetched_at,
-                    e.forecast_date, e.forecast_hour,
+                    e.forecast_time,
                     e.condition_text, e.icon_url,
                     e.temperature, e.temp_max, e.temp_min,
                     e.precip_probability, e.precip_amount,
@@ -227,7 +251,7 @@ def get_latest_forecast(
         rows = conn.execute(
             f'''SELECT * FROM forecast_snapshots
                 WHERE {where} AND fetched_at = ?
-                ORDER BY forecast_date, forecast_hour''',
+                ORDER BY forecast_time''',
             params + [latest_ts],
         ).fetchall()
         return [dict(r) for r in rows]
@@ -269,7 +293,7 @@ def get_forecasts_by_poll(
         rows = conn.execute(
             '''SELECT * FROM forecast_snapshots
                WHERE location_id = ? AND provider = ? AND granularity = ? AND fetched_at = ?
-               ORDER BY forecast_date, forecast_hour''',
+               ORDER BY forecast_time''',
             (location_id, provider, granularity, fetched_at),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -279,8 +303,8 @@ def get_available_forecast_dates(location_id: int) -> list[str]:
     """All unique forecast dates archived for a location, newest first."""
     with get_db() as conn:
         return [r[0] for r in conn.execute(
-            '''SELECT DISTINCT forecast_date FROM forecast_snapshots
-               WHERE location_id = ? ORDER BY forecast_date DESC''',
+            '''SELECT DISTINCT date(forecast_time) FROM forecast_snapshots
+               WHERE location_id = ? ORDER BY forecast_time DESC''',
             (location_id,),
         )]
 
@@ -301,7 +325,7 @@ def get_polls_covering_date(
             rows = conn.execute(
                 f'''SELECT DISTINCT fetched_at, provider, granularity
                     FROM forecast_snapshots
-                    WHERE location_id = ? AND forecast_date = ?
+                    WHERE location_id = ? AND date(forecast_time) = ?
                       AND provider IN ({ph})
                     ORDER BY fetched_at''',
                 [location_id, target_date] + list(providers),
@@ -310,7 +334,7 @@ def get_polls_covering_date(
             rows = conn.execute(
                 '''SELECT DISTINCT fetched_at, provider, granularity
                    FROM forecast_snapshots
-                   WHERE location_id = ? AND forecast_date = ?
+                   WHERE location_id = ? AND date(forecast_time) = ?
                    ORDER BY fetched_at''',
                 [location_id, target_date],
             ).fetchall()
@@ -321,9 +345,9 @@ def get_polls_covering_date(
                 '''SELECT * FROM forecast_snapshots
                    WHERE location_id = ? AND provider = ?
                      AND granularity = ? AND fetched_at = ?
-                     AND forecast_date <= ?
-                   ORDER BY forecast_date, forecast_hour''',
-                [location_id, provider, granularity, fetched_at, target_date],
+                     AND forecast_time <= ?
+                   ORDER BY forecast_time''',
+                [location_id, provider, granularity, fetched_at, target_date + 'T23:59:59'],
             ).fetchall()
             result.append({
                 'fetched_at': fetched_at,
@@ -354,7 +378,7 @@ def get_forecast_evolution(
 
         rows = conn.execute(
             f'''SELECT * FROM forecast_snapshots
-                WHERE location_id = ? AND granularity = 'daily' AND forecast_date = ?
+                WHERE location_id = ? AND granularity = 'daily' AND date(forecast_time) = ?
                 {provider_clause}
                 ORDER BY fetched_at ASC''',
             params,

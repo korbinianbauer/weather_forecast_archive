@@ -73,7 +73,7 @@ def _parse_week(html: str) -> list[ForecastEntry]:
     for tab in day_tabs[:14]:
         try:
             entry = _parse_day_tab(tab)
-            if entry and entry.forecast_date:
+            if entry and entry.forecast_time:
                 result.append(entry)
         except Exception as e:
             logger.warning('Day tab parse error: %s', e)
@@ -83,6 +83,7 @@ def _parse_week(html: str) -> list[ForecastEntry]:
 def _parse_day_tab(tab) -> ForecastEntry:
     date_el = tab.find('time', class_='date')
     forecast_date = date_el['datetime'] if date_el and date_el.get('datetime') else ''
+    forecast_time = f'{forecast_date}T00:00:00' if forecast_date else ''
 
     picto = tab.find('img', class_='weather-pictogram')
     condition_text: Optional[str] = picto.get('alt') or None if picto else None
@@ -105,7 +106,7 @@ def _parse_day_tab(tab) -> ForecastEntry:
     precip_amount = _parse_precip(precip_el.get_text() if precip_el else '')
 
     return ForecastEntry(
-        forecast_date=forecast_date,
+        forecast_time=forecast_time,
         granularity='daily',
         condition_text=condition_text,
         icon_url=icon_url,

@@ -6,15 +6,15 @@ from typing import Optional
 @dataclass
 class ForecastEntry:
     """
-    Common archive format for all providers and both granularities.
+    Common archive format for all providers.
 
-    Log only what the provider explicitly supplies — leave everything else as
-    None. Use `temperature` for a single point-in-time value (e.g. hourly),
-    `temp_max` / `temp_min` for daily extremes.
+    forecast_time is ISO 8601 UTC without offset, e.g. '2026-05-25T00:00:00'.
+    For daily entries the time component is always T00:00:00.
+    Use `temperature` for a single point value, `temp_max`/`temp_min` for
+    daily extremes.
     """
-    forecast_date: str                          # YYYY-MM-DD
+    forecast_time: str                          # ISO 8601, e.g. '2026-05-25T00:00:00'
     granularity: str                            # 'daily' | 'hourly'
-    forecast_hour: Optional[int] = None         # 0-23; None for daily entries
     condition_text: Optional[str] = None
     icon_url: Optional[str] = None
     temperature: Optional[float] = None         # °C — single representative value (e.g. hourly)
@@ -66,7 +66,7 @@ class WeatherProvider(ABC):
         provider_location_id: str,
         extra: dict,
     ) -> list[ForecastEntry]:
-        """Return up to 14 ForecastEntry objects with granularity='daily'."""
+        """Return ForecastEntry objects with granularity='daily'."""
         raise NotImplementedError
 
     def fetch_hourly(

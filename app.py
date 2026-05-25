@@ -86,7 +86,7 @@ def index():
 
         for source in sources:
             entries = db.get_latest_forecast(loc['id'], provider=source['provider'], granularity='daily')
-            by_date = {e['forecast_date']: e for e in entries}
+            by_date = {e['forecast_time'][:10]: e for e in entries}
             all_dates.update(by_date.keys())
             rows.append({
                 'provider': source['provider'],
