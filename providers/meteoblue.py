@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from typing import Optional
 from urllib.parse import quote
 
@@ -58,10 +59,17 @@ class MeteoblueProvider(WeatherProvider):
         try:
             resp = requests.get(url, headers=_HEADERS, timeout=20)
             resp.raise_for_status()
-            return _parse_week(resp.text)
+            entries = _parse_week(resp.text)
         except Exception as e:
             logger.error('Meteoblue daily fetch failed for %s: %s', provider_location_id, e)
             return []
+
+        probs = _fetch_precip_probs(provider_location_id, len(entries))
+        for i, entry in enumerate(entries):
+            if i in probs:
+                entry.precip_probability = probs[i]
+
+        return entries
 
 
 # ── HTML parsing ──────────────────────────────────────────────────────────────
@@ -103,15 +111,14 @@ def _parse_day_tab(tab) -> ForecastEntry:
         wind_speed = _parse_int(wind_el.get_text())
 
     precip_el = tab.find(class_='tab-precip')
-    precip_amount = _parse_precip(precip_el.get_text() if precip_el else '')
+    precip_amount = _parse_precip_amount(precip_el.get_text() if precip_el else '')
 
     sunshine_hours: Optional[float] = None
     sun_el = tab.find(class_='tab-sun')
     if sun_el:
-        # Strip the glyph span, leaving just the text like "11 h"
         for glyph in sun_el.find_all('span'):
             glyph.decompose()
-        sunshine_hours = _parse_precip(sun_el.get_text())  # reuse float parser
+        sunshine_hours = _parse_float(sun_el.get_text())
 
     return ForecastEntry(
         forecast_time=forecast_time,
@@ -125,6 +132,34 @@ def _parse_day_tab(tab) -> ForecastEntry:
         precip_amount=precip_amount,
         sunshine_hours=sunshine_hours,
     )
+
+
+def _fetch_precip_probs(location_id: str, num_days: int) -> dict[int, int]:
+    """Fetch max daily precipitation probability for each day via per-day detail endpoint."""
+    probs: dict[int, int] = {}
+    detail_headers = {**_HEADERS, 'X-Requested-With': 'XMLHttpRequest'}
+    for day_num in range(1, num_days + 1):
+        url = f'{_BASE}/en/weather/week/oneday/{location_id}?day={day_num}'
+        try:
+            resp = requests.get(url, headers=detail_headers, timeout=10)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            tbl = soup.find('table')
+            if tbl:
+                prob_row = tbl.find('tr', class_='precipprobs')
+                if prob_row:
+                    max_prob = 0
+                    for td in prob_row.find_all('td'):
+                        sp = td.find(class_='precip-prob')
+                        if sp:
+                            val = _parse_int(sp.get_text(strip=True).rstrip('%'))
+                            if val is not None:
+                                max_prob = max(max_prob, val)
+                    probs[day_num - 1] = max_prob
+        except Exception as e:
+            logger.warning('Meteoblue precip prob fetch failed for day %d: %s', day_num, e)
+        time.sleep(0.25)
+    return probs
 
 
 # ── value parsers ─────────────────────────────────────────────────────────────
@@ -145,9 +180,26 @@ def _parse_int(text: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
-def _parse_precip(text: str) -> Optional[float]:
+def _parse_float(text: str) -> Optional[float]:
     text = _clean(text)
-    if not text or text == '-':
-        return None
     m = re.search(r'(\d+(?:[.,]\d+)?)', text)
     return float(m.group(1).replace(',', '.')) if m else None
+
+
+def _parse_precip_amount(text: str) -> float:
+    """Parse precipitation amount, returning 0.0 for no-rain indicators.
+
+    Handles: '-', 'dry', ranges like '0-10 mm' (→ midpoint), '<1 mm', plain values.
+    """
+    text = _clean(text)
+    if not text or text == '-':
+        return 0.0
+    # Range: "X-Y mm" or "X - Y mm"
+    m = re.search(r'(\d+(?:[.,]\d+)?)\s*[-–]\s*(\d+(?:[.,]\d+)?)', text)
+    if m:
+        lo = float(m.group(1).replace(',', '.'))
+        hi = float(m.group(2).replace(',', '.'))
+        return (lo + hi) / 2.0
+    # Plain number (possibly with "< " prefix)
+    m = re.search(r'(\d+(?:[.,]\d+)?)', text)
+    return float(m.group(1).replace(',', '.')) if m else 0.0
