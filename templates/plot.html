@@ -74,7 +74,10 @@
     'pressure_pressure',
     'humidity_humidity',
   ];
-  function yRangeFromTraces(traces) {
+  const FLOOR0 = new Set(['sunshine_hours','precipitation_precip_probability','precipitation_precip_amount','wind_wind_speed','cloud_cloud_cover','humidity_humidity']);
+  const CAP100 = new Set(['precipitation_precip_probability','cloud_cloud_cover','humidity_humidity']);
+
+  function yRangeFromTraces(traces, metric) {
     let mn = Infinity, mx = -Infinity;
     for (const t of traces) {
       for (const v of (t.y || [])) {
@@ -86,7 +89,33 @@
     }
     if (!isFinite(mn)) return null;
     const pad = (mx - mn) * 0.08 || 1;
-    return [mn - pad, mx + pad];
+    return [FLOOR0.has(metric) ? 0 : mn - pad, CAP100.has(metric) ? 100 : mx + pad];
+  }
+
+  const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  function buildAxisDecorations(x0Str, x1Str) {
+    const shapes = [], tickvals = [], ticktext = [];
+    const [y0, m0, d0] = x0Str.slice(0, 10).split('-').map(Number);
+    const [y1, m1, d1] = x1Str.slice(0, 10).split('-').map(Number);
+    const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    let cur = new Date(y0, m0-1, d0);
+    const end = new Date(y1, m1-1, d1);
+    while (cur <= end) {
+      const ds = fmt(cur), dow = cur.getDay();
+      const next = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate()+1);
+      const ns = fmt(next);
+      if (dow === 6)
+        shapes.push({type:'rect',xref:'x',yref:'paper',x0:ds+'T00:00:00',x1:ns+'T00:00:00',y0:0,y1:1,fillcolor:'rgba(255,200,100,0.075)',line:{width:0},layer:'below'});
+      else if (dow === 0)
+        shapes.push({type:'rect',xref:'x',yref:'paper',x0:ds+'T00:00:00',x1:ns+'T00:00:00',y0:0,y1:1,fillcolor:'rgba(255,150,50,0.125)',line:{width:0},layer:'below'});
+      shapes.push({type:'line',xref:'x',yref:'paper',x0:ds+'T00:00:00',x1:ds+'T00:00:00',y0:0,y1:1,line:{color:'#e2e8f0',width:1},layer:'below'});
+      tickvals.push(ds+'T12:00:00');
+      ticktext.push(DAYS[dow]+'<br>'+String(cur.getDate()).padStart(2,'0')+'.'+String(cur.getMonth()+1).padStart(2,'0')+'.');
+      cur = next;
+    }
+    const last = new Date(y1, m1-1, d1+1);
+    shapes.push({type:'line',xref:'x',yref:'paper',x0:fmt(last)+'T00:00:00',x1:fmt(last)+'T00:00:00',y0:0,y1:1,line:{color:'#e2e8f0',width:1},layer:'below'});
+    return { shapes, tickvals, ticktext };
   }
 
   const METRIC_LABELS = {
@@ -157,6 +186,7 @@
   const metricsPresent = new Set(tracesAll.map(t => t.metric));
   const allMetrics = METRIC_ORDER.filter(m => metricsPresent.has(m));
   const divIds = [];
+  const { shapes: axShapes, tickvals: axTickvals, ticktext: axTicktext } = buildAxisDecorations(xRangeStart, xRangeEnd);
 
   for (const metric of allMetrics) {
     const wrapper = document.createElement('div');
@@ -189,14 +219,16 @@
       if (key) (traceMap[divId][key] ||= []).push(i);
     });
 
-    const yr = yRangeFromTraces(traces);
+    const yr = yRangeFromTraces(traces, metric);
     const layout = {
       margin:      { t: 10, b: 50, l: 60, r: 20 },
       xaxis: {
         type: 'date',
         title: { text: 'Poll timestamp (' + tzName + ')', standoff: 8 },
-        tickformat: '%d.%m %H:%M',
-        gridcolor: '#e2e8f0',
+        showgrid: false,
+        tickmode: 'array',
+        tickvals: axTickvals,
+        ticktext: axTicktext,
         range: [xRangeStart, xRangeEnd],
         fixedrange: true,
       },
@@ -207,6 +239,7 @@
       showlegend:  false,
       hovermode:   'x unified',
       font:        { family: 'system-ui, -apple-system, sans-serif', size: 12 },
+      shapes:      axShapes,
     };
 
     Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
