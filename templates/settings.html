@@ -230,7 +230,7 @@
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
 
         <div class="field-row">
-          <label class="field-label">Cron expression (UTC)</label>
+          <label class="field-label">Cron expression ({{ server_tz }})</label>
           <div class="cron-presets">
             {% for label, expr in [
               ('06:00 daily',   '0 6 * * *'),
@@ -250,16 +250,11 @@
                  placeholder="0 6 * * *" style="font-family:monospace;">
           <div class="field-hint">
             Format: <code>minute hour day month weekday</code>
-            &nbsp;·&nbsp; All times UTC.
+            &nbsp;·&nbsp; Times in server timezone ({{ server_tz }}).
           </div>
         </div>
 
-        <div style="background:#fafaf7; border:1px solid #e5e0c8; border-radius:6px;
-                    padding:.65rem .9rem; font-size:.8rem; color:#6b6040; margin-bottom:1.25rem;">
-          Schedule changes take effect after the poller process restarts.
-        </div>
-
-        <button type="submit" class="btn btn-primary">Save Schedule</button>
+<button type="submit" class="btn btn-primary">Save Schedule</button>
       </form>
     </div>
 
