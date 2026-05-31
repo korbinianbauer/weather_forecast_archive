@@ -31,6 +31,8 @@
   div.day-cell { cursor: pointer; }
   div.day-cell[data-dow="sat"] { background: rgba(255,200,100,0.075); }
   div.day-cell[data-dow="sun"] { background: rgba(255,150,50,0.125); }
+  div.day-cell.day-today { border-top: 3px solid #ef4444; }
+  div.day-cell.day-today.evo-dimmed { border-top-color: #fca5a5; }
   div.day-cell.col-hover { border-color: var(--primary); background: #eff6ff; }
   div.day-cell.evo-active { border-color: var(--primary); background: #dbeafe; outline: 2px solid var(--primary); outline-offset: -2px; }
   div.day-cell.evo-dimmed { opacity: 0.3; }
@@ -492,7 +494,7 @@ function renderEvolutionInline(locId, data) {
   const _targetShape = { type:'rect', xref:'x', yref:'paper',
     x0: targetDate+'T00:00:00', x1: _tgtNextStr+'T00:00:00',
     y0:0, y1:1, fillcolor:'rgba(59,130,246,0.15)',
-    line:{ color:'rgba(59,130,246,0.4)', width:1 }, layer:'below' };
+    line:{ color:'#1a6fb5', width:2 }, layer:'below' };
   const allChartShapes = [...axShapes, _targetShape];
 
   const metricsPresent = new Set(tracesAll.map(t => t.metric));
@@ -966,17 +968,19 @@ async function refreshLocation(btn, locId, csrf) {
   }
 }
 
-// Per-cell init: weekend backgrounds + column hover via mouseenter/mouseleave
+// Per-cell init: weekend backgrounds + today highlight + column hover
 // mouseenter/mouseleave only fire when entering/leaving the element itself,
 // never for child elements — no relatedTarget juggling needed.
+const _todayStr = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
 document.querySelectorAll('.day-cell[data-date]:not(.empty)').forEach(cell => {
   const { loc, date } = cell.dataset;
 
-  // Weekend background
+  // Weekend background + today bar
   const [y, m, d] = date.split('-').map(Number);
   const dow = new Date(y, m-1, d).getDay();
   if (dow === 6) cell.dataset.dow = 'sat';
   else if (dow === 0) cell.dataset.dow = 'sun';
+  if (date === _todayStr) cell.classList.add('day-today');
 
   // Column hover — timer keyed by loc so moving across columns cancels the right timer
   cell.addEventListener('mouseenter', () => {
