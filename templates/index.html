@@ -56,10 +56,21 @@
   }
 </style>
 
-<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem;">
-  <h2 style="margin:0;" id="page-title">Forecast</h2>
+<div style="display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem;">
+  <h2 style="margin:0; flex:1;" id="page-title">Forecast</h2>
+
+  <form method="get" style="display:flex; align-items:center; gap:.5rem; flex-shrink:0;">
+    <input type="date" name="start" value="{{ date_start }}"
+           onchange="this.form.submit()"
+           style="padding:.35rem .6rem; border:1px solid var(--border); border-radius:6px;
+                  font-size:.85rem; background:var(--surface); color:var(--text); cursor:pointer;">
+    <span style="font-size:.8rem; color:var(--muted); white-space:nowrap;">– {{ date_end_display }}</span>
+  </form>
+
   {% if session.logged_in %}
-  <button class="btn btn-primary" onclick="openModal()">+ Add Location</button>
+  <div style="flex:1; display:flex; justify-content:flex-end;">
+    <button class="btn btn-primary" onclick="openModal()">+ Add Location</button>
+  </div>
   {% endif %}
 </div>
 

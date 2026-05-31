@@ -7,11 +7,11 @@ import secrets
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import date as _date, datetime, timedelta
 from functools import wraps
 
-from flask import (Flask, abort, jsonify, redirect, render_template,
-                   request, session, url_for)
+from flask import (Flask, abort, jsonify, make_response, redirect,
+                   render_template, request, session, url_for)
 
 import db
 import providers
@@ -191,12 +191,18 @@ def _provider_rgba(provider: str, alpha: float) -> str:
 
 # ── routes ────────────────────────────────────────────────────────────────────
 
+def _fmt_date(s: str) -> str:
+    return datetime.strptime(s, '%Y-%m-%d').strftime('%-d %b %Y')
+
+
 @app.route('/')
 def index():
     locs = db.get_locations()
     provider_labels = {p.name: p.display_name for p in providers.all_providers()}
 
     location_data = []
+    global_dates: set[str] = set()
+
     for loc in locs:
         sources = db.get_location_sources(loc['id'])
         rows = []
@@ -212,18 +218,41 @@ def index():
                 'by_date': by_date,
             })
 
+        global_dates.update(all_dates)
         location_data.append({
             'location': loc,
             'all_dates': sorted(all_dates),
             'rows': rows,
         })
 
-    return render_template(
+    global_sorted = sorted(global_dates)
+    default_start = global_sorted[0] if global_sorted else _date.today().isoformat()
+    date_start = request.args.get('start', default_start)
+
+    try:
+        start_dt = _date.fromisoformat(date_start)
+    except ValueError:
+        start_dt = _date.today()
+        date_start = start_dt.isoformat()
+
+    # Always show exactly 16 days starting from date_start; empty cells where no data exists
+    window_dates = [(start_dt + timedelta(days=i)).isoformat() for i in range(16)]
+    date_end = window_dates[-1]
+
+    for item in location_data:
+        item['all_dates'] = window_dates
+
+    r = make_response(render_template(
         'index.html',
         location_data=location_data,
         provider_labels=provider_labels,
         all_providers=providers.all_providers(),
-    )
+        date_start=date_start,
+        date_end=date_end,
+        date_end_display=_fmt_date(date_end),
+    ))
+    r.headers['Cache-Control'] = 'no-store'
+    return r
 
 
 @app.route('/search')
