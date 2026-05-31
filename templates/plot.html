@@ -38,9 +38,19 @@
   {% endif %}
 </div>
 
+<style>
+  .plot-charts     { display: flex; flex-direction: column; gap: .75rem; }
+  .plot-chart-wrap { background: #f8fafc; border-radius: 6px; overflow: hidden; }
+  .plot-chart-label {
+    font-size: .7rem; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .06em;
+    padding: .4rem .75rem .0rem;
+  }
+</style>
+
 {# ── charts ── #}
 {% if traces_json != '[]' %}
-<div id="charts-container"></div>
+<div id="charts-container" class="plot-charts"></div>
 {% else %}
 <div class="card" style="text-align:center; padding:3rem; color:var(--muted);">
   No archived forecasts found for this selection.
@@ -169,7 +179,7 @@
   if (legendEntries.length) {
     const legendEl = document.createElement('div');
     legendEl.className = 'plot-legend';
-    legendEl.style.marginBottom = '1rem';
+    legendEl.style.marginBottom = '0';
     for (const e of legendEntries) {
       const item = document.createElement('label');
       item.className = 'plot-legend-item';
@@ -192,17 +202,17 @@
 
   for (const metric of allMetrics) {
     const wrapper = document.createElement('div');
-    wrapper.className = 'card gap';
+    wrapper.className = 'plot-chart-wrap';
 
-    const title = document.createElement('h3');
-    title.style.cssText = 'font-size:1rem;font-weight:700;margin-bottom:.5rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;';
+    const title = document.createElement('div');
+    title.className = 'plot-chart-label';
     title.textContent = METRIC_LABELS[metric] || metric;
     wrapper.appendChild(title);
 
     const plotDiv = document.createElement('div');
     const divId = 'plot-' + metric.replace(/_/g, '-');
     plotDiv.id = divId;
-    plotDiv.style.height = '280px';
+    plotDiv.style.height = '200px';
     wrapper.appendChild(plotDiv);
     container.appendChild(wrapper);
     divIds.push(divId);
@@ -223,7 +233,7 @@
 
     const yr = yRangeFromTraces(traces, metric);
     const layout = {
-      margin:      { t: 10, b: 50, l: 60, r: 20 },
+      margin:      { t: 8, b: 50, l: 50, r: 12 },
       xaxis: {
         type: 'date',
         title: { text: 'Poll timestamp (' + tzName + ')', standoff: 8 },
