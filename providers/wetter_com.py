@@ -1,6 +1,7 @@
 import logging
 import re
-from datetime import date
+import time
+from datetime import date, timedelta
 from typing import Optional
 from urllib.parse import quote
 
@@ -55,10 +56,20 @@ class WetterComProvider(WeatherProvider):
         try:
             resp = requests.get(url, headers=_HEADERS, timeout=20)
             resp.raise_for_status()
-            return _parse_daily(resp.text)
+            entries = _parse_daily(resp.text)
         except Exception as e:
             logger.error('Wetter.com daily fetch failed for %s: %s', provider_location_id, e)
             return []
+
+        detail_by_date = _fetch_detail_extras(seo, provider_location_id)
+        for entry in entries:
+            d = detail_by_date.get(entry.forecast_time[:10])
+            if d:
+                entry.cloud_cover = d.get('cloud_cover')
+                entry.humidity = d.get('humidity')
+                entry.pressure = d.get('pressure')
+
+        return entries
 
 
 # ── HTML parsing ──────────────────────────────────────────────────────────────
@@ -131,6 +142,88 @@ def _parse_daily_row(row, ref: date, sun_by_idx: dict) -> ForecastEntry:
         wind_speed=_int(row.find('div', class_='swg-col-wv3')),
         sunshine_hours=sun_by_idx.get(idx),
     )
+
+
+def _fetch_detail_extras(seo: str, loc_id: str) -> dict[str, dict]:
+    """Fetch per-day detail pages (today + 7 days ahead) to extract cloud_cover, humidity, pressure."""
+    today = date.today()
+    result: dict[str, dict] = {}
+
+    for offset in range(8):
+        target = today + timedelta(days=offset)
+        if offset == 0:
+            url = f'{_BASE}/{seo}/{loc_id}.html'
+        elif offset == 1:
+            url = f'{_BASE}/wetter_aktuell/wettervorhersage/morgen/{seo}/{loc_id}.html'
+        else:
+            url = f'{_BASE}/wetter_aktuell/wettervorhersage/in-{offset}-tagen/{seo}/{loc_id}.html'
+
+        try:
+            resp = requests.get(url, headers=_HEADERS, timeout=15)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            table = soup.find('table', id='vhs-detail-diagram')
+            if table:
+                result[str(target)] = _parse_detail_extras(table)
+        except Exception as e:
+            logger.warning('Wetter.com detail fetch +%d failed: %s', offset, e)
+
+        time.sleep(0.25)
+
+    return result
+
+
+def _parse_detail_extras(table) -> dict:
+    """Extract daily mean cloud_cover (%), humidity (%), pressure (hPa) from hourly diagram table."""
+    rows = table.find_all('tr')
+    data: dict = {}
+
+    for i, row in enumerate(rows[:-1]):
+        header = row.get_text(separator=' ', strip=True)
+        next_row = rows[i + 1]
+
+        if 'Luftdruck' in header:
+            vals = _row_floats(next_row)
+            if vals:
+                data['pressure'] = round(sum(vals) / len(vals), 1)
+        elif 'Relative Feuchte' in header or ('Feucht' in header and '%' in header):
+            vals = _row_ints(next_row)
+            if vals:
+                data['humidity'] = round(sum(vals) / len(vals))
+        elif 'Bew' in header and 'lkung' in header:  # Bewölkungsgrad
+            vals = _row_octants(next_row)
+            if vals:
+                data['cloud_cover'] = round(sum(vals) / len(vals))
+
+    return data
+
+
+def _row_floats(row) -> list[float]:
+    result = []
+    for td in row.find_all(['td', 'th']):
+        m = re.search(r'-?\d+(?:[.,]\d+)?', td.get_text(strip=True))
+        if m:
+            result.append(float(m.group().replace(',', '.')))
+    return result
+
+
+def _row_ints(row) -> list[int]:
+    result = []
+    for td in row.find_all(['td', 'th']):
+        m = re.search(r'-?\d+', td.get_text(strip=True))
+        if m:
+            result.append(int(m.group()))
+    return result
+
+
+def _row_octants(row) -> list[float]:
+    """Parse 'X/8' cloud cover cells and return percentage values."""
+    result = []
+    for td in row.find_all(['td', 'th']):
+        m = re.search(r'(\d+)/8', td.get_text(strip=True))
+        if m:
+            result.append(int(m.group(1)) * 100 / 8)
+    return result
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
