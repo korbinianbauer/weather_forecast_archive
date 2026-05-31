@@ -28,8 +28,10 @@
     background: var(--surface); overflow: hidden; min-width: 0;
   }
   .day-cell.empty { background: transparent; border-color: transparent; }
-  a.day-cell { text-decoration: none; color: inherit; cursor: pointer; }
-  a.day-cell:hover { border-color: var(--primary); background: #eff6ff; }
+  div.day-cell { cursor: pointer; }
+  div.day-cell:hover { border-color: var(--primary); background: #eff6ff; }
+  div.day-cell.evo-active { border-color: var(--primary); background: #eff6ff; outline: 2px solid var(--primary); outline-offset: -2px; }
+  .evolution-view { margin-top: .75rem; }
   .day-cell .dc-date { font-size: .62rem; font-weight: 700; color: var(--muted); white-space: nowrap; }
   .day-cell img.dc-icon { width: 30px; height: 30px; display: block; margin: .2rem auto; }
   .day-cell .dc-temps { font-size: .72rem; white-space: nowrap; }
@@ -49,7 +51,7 @@
 </style>
 
 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem;">
-  <h2 style="margin:0;">Tracked Locations</h2>
+  <h2 style="margin:0;">Forecast</h2>
   {% if session.logged_in %}
   <button class="btn btn-primary" onclick="openModal()">+ Add Location</button>
   {% endif %}
@@ -68,7 +70,7 @@
       </span>
       <div class="loc-actions">
         <button class="btn btn-outline btn-sm" id="plotbtn-{{ loc.id }}"
-                onclick="togglePlot({{ loc.id }})">📈 Plot</button>
+                onclick="togglePlot({{ loc.id }})">📈 Plot Forecast</button>
         {% if session.logged_in %}
         <button class="btn btn-outline btn-sm" onclick="refreshLocation(this, {{ loc.id }}, '{{ csrf_token() }}')">↻</button>
         <form method="post" action="{{ url_for('delete_location', location_id=loc.id) }}"
@@ -95,8 +97,10 @@
             {% for d in item.all_dates %}
             {% set e = row.by_date.get(d) %}
             {% if e %}
-            {% set evo_url = url_for('location_plot', location_id=loc.id, date=d, providers=row.provider) %}
-            <a class="day-cell" href="{{ evo_url }}" title="View forecast evolution for {{ d }}">
+            <div class="day-cell"
+                 data-loc="{{ loc.id }}" data-date="{{ d }}" data-provider="{{ row.provider }}"
+                 onclick="openEvolution({{ loc.id }}, '{{ d }}', '{{ row.provider }}')"
+                 title="View forecast evolution for {{ d }}">
               <div class="dc-date">{{ d[8:] }}.{{ d[5:7] }}.</div>
               {% if e.icon_url %}
               <img class="dc-icon" src="{{ e.icon_url }}" alt="{{ e.condition_text or '' }}"
@@ -112,7 +116,7 @@
               {% if e.precip_probability is not none %}
               <div class="dc-precip">💧{{ e.precip_probability }}%</div>
               {% endif %}
-            </a>
+            </div>
             {% else %}
             <div class="day-cell empty"></div>
             {% endif %}
@@ -125,9 +129,14 @@
       {% endif %}
     </div>
 
-    {# ── plot view ── #}
+    {# ── graph view ── #}
     <div class="forecast-plot" id="plot-{{ loc.id }}">
       <div class="plot-charts" id="plot-charts-{{ loc.id }}"></div>
+    </div>
+
+    {# ── evolution view (inline, shown when a day card is clicked) ── #}
+    <div class="evolution-view" id="evo-{{ loc.id }}" style="display:none;">
+      <div class="plot-charts" id="evo-charts-{{ loc.id }}"></div>
     </div>
 
   </div>
@@ -331,16 +340,27 @@ function rgba(provider, a) {
   return `rgba(${c.r},${c.g},${c.b},${a})`;
 }
 
+const evoState = {};
+
+function closeEvolution(locId) {
+  const evoEl = document.getElementById('evo-' + locId);
+  if (evoEl) evoEl.style.display = 'none';
+  delete evoState[locId];
+  document.querySelectorAll(`.day-cell[data-loc="${locId}"]`).forEach(el => el.classList.remove('evo-active'));
+}
+
 function togglePlot(locId) {
   const rowsEl  = document.getElementById('rows-' + locId);
   const plotEl  = document.getElementById('plot-' + locId);
   const btn     = document.getElementById('plotbtn-' + locId);
   const showing = plotEl.classList.contains('visible');
 
+  closeEvolution(locId);
+
   if (showing) {
     plotEl.classList.remove('visible');
     rowsEl.style.display = '';
-    btn.textContent = '📈 Plot';
+    btn.textContent = '📈 Plot Forecast';
   } else {
     rowsEl.style.display = 'none';
     plotEl.classList.add('visible');
@@ -352,8 +372,209 @@ function togglePlot(locId) {
   }
 }
 
-const FLOOR0 = new Set(['sun','precip_prob','precip_amt','wind','cloud','humidity']);
-const CAP100 = new Set(['precip_prob','cloud','humidity']);
+const EVO_METRIC_ORDER = ['temperature','sunshine_hours','precipitation_precip_probability','precipitation_precip_amount','wind_wind_speed','cloud_cloud_cover','pressure_pressure','humidity_humidity'];
+const EVO_METRIC_LABELS = {
+  temperature:                       'Temperature °C',
+  sunshine_hours:                    'Sunshine hours h',
+  precipitation_precip_probability:  'Precip probability %',
+  precipitation_precip_amount:       'Precipitation mm',
+  wind_wind_speed:                   'Wind speed km/h',
+  cloud_cloud_cover:                 'Cloud cover %',
+  pressure_pressure:                 'Pressure hPa',
+  humidity_humidity:                 'Humidity %',
+};
+
+function buildEvolutionAxisDecorations(x0Str, x1Str, targetDate) {
+  const { shapes } = buildAxisDecorations(x0Str, x1Str);
+  const tgt = new Date(targetDate + 'T00:00:00');
+  const [y0, m0, d0] = x0Str.slice(0, 10).split('-').map(Number);
+  const [y1, m1, d1] = x1Str.slice(0, 10).split('-').map(Number);
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const tickvals = [], ticktext = [];
+  let cur = new Date(y0, m0-1, d0);
+  const end = new Date(y1, m1-1, d1);
+  while (cur <= end) {
+    const ds = fmt(cur);
+    const diffDays = Math.round((tgt - cur) / 86400000);
+    const dayLabel = diffDays === 0 ? '0d' : '-' + diffDays + 'd';
+    tickvals.push(ds + 'T12:00:00');
+    ticktext.push(dayLabel + '<br>' + String(cur.getDate()).padStart(2,'0') + '.' + String(cur.getMonth()+1).padStart(2,'0') + '.');
+    cur = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate()+1);
+  }
+  return { shapes, tickvals, ticktext };
+}
+
+function renderEvolutionInline(locId, data) {
+  const container = document.getElementById('evo-charts-' + locId);
+  container.innerHTML = '';
+  const tracesAll = data.traces;
+  const targetDate = data.target_date;
+  const defaultProvider = data.default_provider;
+  const providerLabels = data.provider_labels;
+
+  if (!tracesAll || !tracesAll.length) {
+    container.innerHTML = '<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">No evolution data for this date.</div>';
+    return;
+  }
+
+  function utcToLocal(isoStr) {
+    const d = new Date(isoStr + 'Z');
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+  tracesAll.forEach(t => { if (Array.isArray(t.x)) t.x = t.x.map(utcToLocal); });
+  const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  const xRangeEnd = targetDate + 'T23:59:59';
+  const allXs = tracesAll.flatMap(t => Array.isArray(t.x) ? t.x : []).filter(Boolean);
+  const dataStart = allXs.length ? allXs.reduce((a, b) => a < b ? a : b) : targetDate;
+  const earliest16 = new Date(targetDate + 'T00:00:00');
+  earliest16.setDate(earliest16.getDate() - 16);
+  const xRangeStart = dataStart < earliest16.toISOString().slice(0, 19) ? dataStart : earliest16.toISOString().slice(0, 19);
+
+  const defaultLabel = defaultProvider ? (providerLabels[defaultProvider] || defaultProvider) : null;
+
+  const legendEntries = [], legendSeen = new Set();
+  for (const t of tracesAll) {
+    if (t.showlegend && t.name && !legendSeen.has(t.name)) {
+      legendSeen.add(t.name);
+      legendEntries.push({ name: t.name, color: (t.line || {}).color || '#888' });
+    }
+  }
+  tracesAll.forEach(t => { t.showlegend = false; });
+  if (defaultLabel) {
+    tracesAll.forEach(t => {
+      const group = t.legendgroup || t.name;
+      if (group && group !== defaultLabel) t.visible = false;
+    });
+  }
+
+  const legendItems = {};
+  if (legendEntries.length) {
+    const legendEl = document.createElement('div');
+    legendEl.className = 'plot-legend';
+    for (const e of legendEntries) {
+      const item = document.createElement('label');
+      item.className = 'plot-legend-item';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !defaultLabel || e.name === defaultLabel;
+      item.appendChild(cb);
+      item.insertAdjacentHTML('beforeend',
+        `<span class="plot-legend-swatch" style="background:${e.color}"></span>${e.name}`);
+      legendEl.appendChild(item);
+      legendItems[e.name] = { cb };
+    }
+    container.appendChild(legendEl);
+  }
+
+  const { shapes: axShapes, tickvals: axTickvals, ticktext: axTicktext } = buildEvolutionAxisDecorations(xRangeStart, xRangeEnd, targetDate);
+  const metricsPresent = new Set(tracesAll.map(t => t.metric));
+  const allMetrics = EVO_METRIC_ORDER.filter(m => metricsPresent.has(m));
+  const divIds = [];
+
+  for (const metric of allMetrics) {
+    const wrap = document.createElement('div');
+    wrap.className = 'plot-chart-wrap';
+    const lbl = document.createElement('div');
+    lbl.className = 'plot-chart-label';
+    lbl.textContent = EVO_METRIC_LABELS[metric] || metric;
+    wrap.appendChild(lbl);
+    const plotDiv = document.createElement('div');
+    const divId = `evo-${locId}-${metric.replace(/_/g, '-')}`;
+    plotDiv.id = divId;
+    plotDiv.style.height = '200px';
+    wrap.appendChild(plotDiv);
+    container.appendChild(wrap);
+    divIds.push(divId);
+  }
+
+  const traceMap = {};
+  for (let mi = 0; mi < allMetrics.length; mi++) {
+    const metric = allMetrics[mi];
+    const traces = tracesAll.filter(t => t.metric === metric);
+    const divId = divIds[mi];
+    traceMap[divId] = {};
+    traces.forEach((t, i) => {
+      const key = t.legendgroup || t.name;
+      if (key) (traceMap[divId][key] ||= []).push(i);
+    });
+    const yr = yRangeFromTraces(traces, metric);
+    Plotly.newPlot(divId, traces, {
+      margin: { t: 8, b: 50, l: 50, r: 12 },
+      xaxis: {
+        type: 'date',
+        title: { text: 'Poll timestamp (' + tzName + ')', standoff: 8 },
+        showgrid: false, tickmode: 'array',
+        tickvals: axTickvals, ticktext: axTicktext,
+        range: [xRangeStart, xRangeEnd], fixedrange: true,
+      },
+      yaxis: { gridcolor: '#e2e8f0', zeroline: false, fixedrange: true,
+               ...(yr ? { range: yr, autorange: false } : {}) },
+      paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: '#f8fafc',
+      showlegend: false, hovermode: 'x unified',
+      font: { family: 'system-ui, -apple-system, sans-serif', size: 12 },
+      shapes: axShapes,
+    }, { responsive: true, displayModeBar: false });
+  }
+
+  for (const [name, { cb }] of Object.entries(legendItems)) {
+    cb.addEventListener('change', () => {
+      for (const [divId, nameMap] of Object.entries(traceMap)) {
+        const indices = nameMap[name] || [];
+        if (indices.length) Plotly.restyle(divId, { visible: cb.checked }, indices);
+      }
+    });
+  }
+}
+
+function openEvolution(locId, date, provider) {
+  const evoEl  = document.getElementById('evo-' + locId);
+  const plotEl = document.getElementById('plot-' + locId);
+  const rowsEl = document.getElementById('rows-' + locId);
+  const btn    = document.getElementById('plotbtn-' + locId);
+
+  document.querySelectorAll(`.day-cell[data-loc="${locId}"]`).forEach(el => el.classList.remove('evo-active'));
+
+  const prev = evoState[locId];
+  if (prev && prev.date === date && prev.provider === provider) {
+    delete evoState[locId];
+    evoEl.style.display = 'none';
+    return;
+  }
+
+  if (plotEl.classList.contains('visible')) {
+    plotEl.classList.remove('visible');
+    rowsEl.style.display = '';
+    btn.textContent = '📈 Plot Forecast';
+  }
+
+  const cell = document.querySelector(`.day-cell[data-loc="${locId}"][data-date="${date}"][data-provider="${provider}"]`);
+  if (cell) cell.classList.add('evo-active');
+
+  evoState[locId] = { date, provider };
+  evoEl.style.display = '';
+
+  const chartsEl = document.getElementById('evo-charts-' + locId);
+  chartsEl.innerHTML = '<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">Loading…</div>';
+
+  fetch(`/api/location/${locId}/evolution?date=${encodeURIComponent(date)}&providers=${encodeURIComponent(provider)}`)
+    .then(r => r.json())
+    .then(data => {
+      const cur = evoState[locId];
+      if (!cur || cur.date !== date || cur.provider !== provider) return;
+      renderEvolutionInline(locId, data);
+    })
+    .catch(() => {
+      chartsEl.innerHTML = '<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">Failed to load evolution data.</div>';
+    });
+}
+
+const FLOOR0 = new Set(['sun','precip_prob','precip_amt','wind','cloud','humidity',
+  'sunshine_hours','precipitation_precip_probability','precipitation_precip_amount',
+  'wind_wind_speed','cloud_cloud_cover','humidity_humidity']);
+const CAP100 = new Set(['precip_prob','cloud','humidity',
+  'precipitation_precip_probability','cloud_cloud_cover','humidity_humidity']);
 
 function yRangeFromTraces(traces, metricId) {
   let mn = Infinity, mx = -Infinity;
