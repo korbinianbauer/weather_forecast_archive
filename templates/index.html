@@ -33,7 +33,9 @@
   div.day-cell[data-dow="sun"] { background: rgba(255,150,50,0.125); }
   div.day-cell.col-hover { border-color: var(--primary); background: #eff6ff; }
   div.day-cell.evo-active { border-color: var(--primary); background: #dbeafe; outline: 2px solid var(--primary); outline-offset: -2px; }
+  div.day-cell.evo-dimmed { opacity: 0.3; }
   .evolution-view { margin-top: .75rem; }
+  .day-grid { padding-left: 50px; padding-right: 12px; }
   .day-cell .dc-date { font-size: .62rem; font-weight: 700; color: var(--muted); white-space: nowrap; }
   .day-cell img.dc-icon { width: 30px; height: 30px; display: block; margin: .2rem auto; }
   .day-cell .dc-temps { font-size: .72rem; white-space: nowrap; }
@@ -63,7 +65,7 @@
   {% for item in location_data %}
   {% set loc = item.location %}
   {% set n = item.all_dates | length %}
-  <div class="card gap">
+  <div class="card gap" id="card-{{ loc.id }}">
 
     <div class="loc-header">
       <h2>{{ loc.name }}</h2>
@@ -353,7 +355,15 @@ function closeEvolution(locId) {
   const evoEl = document.getElementById('evo-' + locId);
   if (evoEl) evoEl.style.display = 'none';
   delete evoState[locId];
-  document.querySelectorAll(`.day-cell[data-loc="${locId}"]`).forEach(el => el.classList.remove('evo-active'));
+  document.querySelectorAll(`.day-cell[data-loc="${locId}"]`).forEach(el => {
+    el.classList.remove('evo-active', 'evo-dimmed');
+  });
+  const card = document.getElementById('card-' + locId);
+  if (card) {
+    card.classList.remove('loc-evo-open');
+    card.style.position = '';
+    document.getElementById('evo-conn-' + locId)?.remove();
+  }
   updatePageTitle();
 }
 
@@ -474,6 +484,17 @@ function renderEvolutionInline(locId, data) {
   }
 
   const { shapes: axShapes, tickvals: axTickvals, ticktext: axTicktext } = buildEvolutionAxisDecorations(xRangeStart, xRangeEnd, targetDate);
+
+  // Permanent highlight on the target-date ("0d") column
+  const [_ty, _tm, _td] = targetDate.split('-').map(Number);
+  const _tgtNext = new Date(_ty, _tm-1, _td+1);
+  const _tgtNextStr = `${_tgtNext.getFullYear()}-${String(_tgtNext.getMonth()+1).padStart(2,'0')}-${String(_tgtNext.getDate()).padStart(2,'0')}`;
+  const _targetShape = { type:'rect', xref:'x', yref:'paper',
+    x0: targetDate+'T00:00:00', x1: _tgtNextStr+'T00:00:00',
+    y0:0, y1:1, fillcolor:'rgba(59,130,246,0.15)',
+    line:{ color:'rgba(59,130,246,0.4)', width:1 }, layer:'below' };
+  const allChartShapes = [...axShapes, _targetShape];
+
   const metricsPresent = new Set(tracesAll.map(t => t.metric));
   const allMetrics = EVO_METRIC_ORDER.filter(m => metricsPresent.has(m));
   const divIds = [];
@@ -519,7 +540,7 @@ function renderEvolutionInline(locId, data) {
       paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: '#f8fafc',
       showlegend: false, hovermode: 'x unified',
       font: { family: 'system-ui, -apple-system, sans-serif', size: 12 },
-      shapes: axShapes,
+      shapes: allChartShapes,
     }, { responsive: true, displayModeBar: false });
   }
 
@@ -533,26 +554,80 @@ function renderEvolutionInline(locId, data) {
   }
 }
 
+function drawEvolutionConnector(locId) {
+  const state = evoState[locId];
+  if (!state) return;
+  const { date } = state;
+  const card = document.getElementById('card-' + locId);
+  if (!card) return;
+  document.getElementById('evo-conn-' + locId)?.remove();
+
+  // Bottom-center of the last selected day cell (lowest provider row)
+  const cells = [...document.querySelectorAll(`.day-cell[data-loc="${locId}"][data-date="${date}"]`)];
+  if (!cells.length) return;
+  const lastCell = cells[cells.length - 1];
+
+  // First evolution chart div
+  const firstChart = document.querySelector(`#evo-charts-${locId} div[id^="evo-${locId}-"]`);
+  if (!firstChart || !firstChart.layout) return;
+
+  const cardRect  = card.getBoundingClientRect();
+  const cellRect  = lastCell.getBoundingClientRect();
+  const chartRect = firstChart.getBoundingClientRect();
+
+  const startX = cellRect.left + cellRect.width / 2 - cardRect.left;
+  const startY = cellRect.bottom - cardRect.top;
+
+  // x-position of the target date column in the chart
+  const ml = firstChart.layout.margin?.l ?? 50;
+  const mr = firstChart.layout.margin?.r ?? 12;
+  const mt = firstChart.layout.margin?.t ?? 8;
+  const plotW = firstChart.clientWidth - ml - mr;
+  const [r0, r1] = firstChart.layout.xaxis?.range ?? [date, date];
+  const t0 = new Date(r0).getTime(), t1 = new Date(r1).getTime();
+  const frac = t1 > t0 ? Math.min(1, Math.max(0, (new Date(date + 'T12:00:00').getTime() - t0) / (t1 - t0))) : 1;
+  const endX = chartRect.left - cardRect.left + ml + frac * plotW;
+  const endY = chartRect.top  - cardRect.top  + mt;
+  const midY = startY + (endY - startY) * 0.45;
+
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.id = 'evo-conn-' + locId;
+  svg.setAttribute('style', 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;overflow:visible;z-index:1;');
+  const path = document.createElementNS(NS, 'path');
+  path.setAttribute('d', `M ${startX} ${startY} L ${startX} ${midY} L ${endX} ${midY} L ${endX} ${endY}`);
+  path.setAttribute('stroke', 'var(--primary)');
+  path.setAttribute('stroke-width', '1.5');
+  path.setAttribute('stroke-dasharray', '5 3');
+  path.setAttribute('fill', 'none');
+  path.setAttribute('opacity', '0.55');
+  svg.appendChild(path);
+  card.appendChild(svg);
+}
+
 function openEvolution(locId, date) {
   const evoEl  = document.getElementById('evo-' + locId);
   const plotEl = document.getElementById('plot-' + locId);
   const btn    = document.getElementById('plotbtn-' + locId);
 
-  document.querySelectorAll(`.day-cell[data-loc="${locId}"]`).forEach(el => el.classList.remove('evo-active'));
-
   const prev = evoState[locId];
-  if (prev && prev.date === date) {
-    delete evoState[locId];
-    evoEl.style.display = 'none';
-    return;
-  }
+  if (prev && prev.date === date) { closeEvolution(locId); return; }
+
+  closeEvolution(locId); // clean up any previous open state for this location
 
   if (plotEl.classList.contains('visible')) {
     plotEl.classList.remove('visible');
     btn.textContent = '📈 Plot Forecast';
   }
 
-  document.querySelectorAll(`.day-cell[data-loc="${locId}"][data-date="${date}"]`).forEach(el => el.classList.add('evo-active'));
+  // Dim all cards except the target date column
+  document.querySelectorAll(`.day-cell[data-loc="${locId}"]`).forEach(el => {
+    if (el.dataset.date === date) el.classList.add('evo-active');
+    else el.classList.add('evo-dimmed');
+  });
+
+  const card = document.getElementById('card-' + locId);
+  if (card) { card.classList.add('loc-evo-open'); card.style.position = 'relative'; }
 
   evoState[locId] = { date };
   updatePageTitle();
@@ -567,6 +642,7 @@ function openEvolution(locId, date) {
       const cur = evoState[locId];
       if (!cur || cur.date !== date) return;
       renderEvolutionInline(locId, data);
+      setTimeout(() => drawEvolutionConnector(locId), 120);
     })
     .catch(() => {
       chartsEl.innerHTML = '<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">Failed to load evolution data.</div>';
