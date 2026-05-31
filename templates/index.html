@@ -29,6 +29,8 @@
   }
   .day-cell.empty { background: transparent; border-color: transparent; }
   div.day-cell { cursor: pointer; }
+  div.day-cell[data-dow="sat"] { background: rgba(255,200,100,0.075); }
+  div.day-cell[data-dow="sun"] { background: rgba(255,150,50,0.125); }
   div.day-cell.col-hover { border-color: var(--primary); background: #eff6ff; }
   div.day-cell.evo-active { border-color: var(--primary); background: #dbeafe; outline: 2px solid var(--primary); outline-offset: -2px; }
   .evolution-view { margin-top: .75rem; }
@@ -51,7 +53,7 @@
 </style>
 
 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem;">
-  <h2 style="margin:0;">Forecast</h2>
+  <h2 style="margin:0;" id="page-title">Forecast</h2>
   {% if session.logged_in %}
   <button class="btn btn-primary" onclick="openModal()">+ Add Location</button>
   {% endif %}
@@ -342,11 +344,17 @@ function rgba(provider, a) {
 
 const evoState = {};
 
+function updatePageTitle() {
+  const el = document.getElementById('page-title');
+  if (el) el.textContent = Object.keys(evoState).length ? 'Forecast Evolution' : 'Forecast';
+}
+
 function closeEvolution(locId) {
   const evoEl = document.getElementById('evo-' + locId);
   if (evoEl) evoEl.style.display = 'none';
   delete evoState[locId];
   document.querySelectorAll(`.day-cell[data-loc="${locId}"]`).forEach(el => el.classList.remove('evo-active'));
+  updatePageTitle();
 }
 
 function togglePlot(locId) {
@@ -547,6 +555,7 @@ function openEvolution(locId, date) {
   document.querySelectorAll(`.day-cell[data-loc="${locId}"][data-date="${date}"]`).forEach(el => el.classList.add('evo-active'));
 
   evoState[locId] = { date };
+  updatePageTitle();
   evoEl.style.display = '';
 
   const chartsEl = document.getElementById('evo-charts-' + locId);
@@ -564,25 +573,42 @@ function openEvolution(locId, date) {
     });
 }
 
-// Column hover: highlight all cards with same loc+date
-const _colHoverTimers = {};
-document.addEventListener('mouseover', e => {
-  const cell = e.target.closest('.day-cell[data-date]');
-  if (!cell || cell.classList.contains('empty')) return;
-  const { loc, date } = cell.dataset;
-  clearTimeout(_colHoverTimers[loc + ':' + date]);
+// Column hover: highlight all cards with same loc+date, and corresponding day in plots
+// Timer and current-hover are keyed by loc only — one active column per location.
+const _colHoverTimer   = {};   // loc -> timerId
+const _currentColHover = {};   // loc -> date currently highlighted
+
+function _chartHoverShape(date) {
+  const [y, m, d] = date.split('-').map(Number);
+  const nxt = new Date(y, m-1, d+1);
+  const ns = `${nxt.getFullYear()}-${String(nxt.getMonth()+1).padStart(2,'0')}-${String(nxt.getDate()).padStart(2,'0')}`;
+  return { type:'rect', xref:'x', yref:'paper', x0:date+'T00:00:00', x1:ns+'T00:00:00',
+           y0:0, y1:1, fillcolor:'rgba(59,130,246,0.12)', line:{width:0}, layer:'below' };
+}
+function _applyColHover(loc, date) {
+  // Remove CSS from previous column if switching columns
+  const prev = _currentColHover[loc];
+  if (prev && prev !== date) {
+    document.querySelectorAll(`.day-cell[data-loc="${loc}"][data-date="${prev}"]`)
+      .forEach(el => el.classList.remove('col-hover'));
+  }
+  _currentColHover[loc] = date;
   document.querySelectorAll(`.day-cell[data-loc="${loc}"][data-date="${date}"]`)
     .forEach(el => el.classList.add('col-hover'));
-});
-document.addEventListener('mouseout', e => {
-  const cell = e.target.closest('.day-cell[data-date]');
-  if (!cell || cell.classList.contains('empty')) return;
-  const { loc, date } = cell.dataset;
-  _colHoverTimers[loc + ':' + date] = setTimeout(() => {
-    document.querySelectorAll(`.day-cell[data-loc="${loc}"][data-date="${date}"]`)
-      .forEach(el => el.classList.remove('col-hover'));
-  }, 60);
-});
+  const shape = _chartHoverShape(date);
+  for (const divId of (window._plotDivsByLoc||{})[loc] || [])
+    Plotly.relayout(divId, { shapes: [...((window._basePlotShapes||{})[divId]||[]), shape] });
+}
+function _removeColHover(loc, date) {
+  // Ignore stale timers — another column is now active
+  if (_currentColHover[loc] !== date) return;
+  delete _currentColHover[loc];
+  document.querySelectorAll(`.day-cell[data-loc="${loc}"][data-date="${date}"]`)
+    .forEach(el => el.classList.remove('col-hover'));
+  for (const divId of (window._plotDivsByLoc||{})[loc] || [])
+    Plotly.relayout(divId, { shapes: (window._basePlotShapes||{})[divId]||[] });
+}
+// mouseenter/mouseleave are attached per-cell at the bottom of this script
 
 const FLOOR0 = new Set(['sun','precip_prob','precip_amt','wind','cloud','humidity',
   'sunshine_hours','precipitation_precip_probability','precipitation_precip_amount',
@@ -731,7 +757,9 @@ function renderPlot(locId) {
     };
 
     Plotly.newPlot(div.id, traces, layout, { responsive: true, displayModeBar: false });
+    (window._basePlotShapes ||= {})[div.id] = axDec.shapes;
   }
+  (window._plotDivsByLoc ||= {})[locId] = plotDivs;
 
   for (const [provider, { cb }] of Object.entries(legendItems)) {
     cb.addEventListener('change', () => {
@@ -861,6 +889,30 @@ async function refreshLocation(btn, locId, csrf) {
     btn.disabled = false;
   }
 }
+
+// Per-cell init: weekend backgrounds + column hover via mouseenter/mouseleave
+// mouseenter/mouseleave only fire when entering/leaving the element itself,
+// never for child elements — no relatedTarget juggling needed.
+document.querySelectorAll('.day-cell[data-date]:not(.empty)').forEach(cell => {
+  const { loc, date } = cell.dataset;
+
+  // Weekend background
+  const [y, m, d] = date.split('-').map(Number);
+  const dow = new Date(y, m-1, d).getDay();
+  if (dow === 6) cell.dataset.dow = 'sat';
+  else if (dow === 0) cell.dataset.dow = 'sun';
+
+  // Column hover — timer keyed by loc so moving across columns cancels the right timer
+  cell.addEventListener('mouseenter', () => {
+    clearTimeout(_colHoverTimer[loc]);
+    _applyColHover(loc, date);
+  });
+  cell.addEventListener('mouseleave', () => {
+    // Short debounce so moving between provider rows of the same column
+    // gives the next card's mouseenter time to cancel the removal.
+    _colHoverTimer[loc] = setTimeout(() => _removeColHover(loc, date), 80);
+  });
+});
 </script>
 
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
