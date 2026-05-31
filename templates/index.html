@@ -588,7 +588,7 @@ function drawEvolutionConnector(locId) {
   const frac = t1 > t0 ? Math.min(1, Math.max(0, (new Date(date + 'T12:00:00').getTime() - t0) / (t1 - t0))) : 1;
   const endX = chartRect.left - cardRect.left + ml + frac * plotW;
   const endY = chartRect.top  - cardRect.top  + mt;
-  const midY = startY + (endY - startY) * 0.45;
+  const midY = startY + 10; // stay close to cards, above the legend swatches
 
   const NS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(NS, 'svg');
@@ -597,8 +597,8 @@ function drawEvolutionConnector(locId) {
   const path = document.createElementNS(NS, 'path');
   path.setAttribute('d', `M ${startX} ${startY} L ${startX} ${midY} L ${endX} ${midY} L ${endX} ${endY}`);
   path.setAttribute('stroke', 'var(--primary)');
-  path.setAttribute('stroke-width', '1.5');
-  path.setAttribute('stroke-dasharray', '5 3');
+  path.setAttribute('stroke-width', '3');
+  path.setAttribute('stroke-dasharray', 'none');
   path.setAttribute('fill', 'none');
   path.setAttribute('opacity', '0.55');
   svg.appendChild(path);
