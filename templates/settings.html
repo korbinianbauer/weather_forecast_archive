@@ -1,0 +1,573 @@
+{% extends "base.html" %}
+{% block title %}Settings — Weather Archive{% endblock %}
+
+{% block content %}
+<style>
+  .st-layout {
+    display: grid;
+    grid-template-columns: 190px 1fr;
+    gap: 1.75rem;
+    align-items: start;
+  }
+  @media (max-width: 640px) {
+    .st-layout { grid-template-columns: 1fr; }
+    .st-nav { display: flex; flex-wrap: wrap; flex-direction: row !important; gap: .3rem; }
+  }
+
+  .st-nav {
+    display: flex;
+    flex-direction: column;
+    gap: .2rem;
+    position: sticky;
+    top: 1rem;
+  }
+  .st-navitem {
+    display: flex; align-items: center; gap: .55rem;
+    padding: .55rem .9rem;
+    border-radius: 7px;
+    text-decoration: none;
+    font-size: .875rem;
+    font-weight: 500;
+    color: var(--text);
+    transition: background .1s;
+    white-space: nowrap;
+  }
+  .st-navitem:hover { background: var(--border); }
+  .st-navitem.active { background: var(--primary); color: #fff; }
+
+  .st-section h2 { font-size: 1.25rem; margin-bottom: 1.5rem; }
+
+  .field-row { margin-bottom: 1.25rem; }
+  .field-label {
+    display: block; font-size: .78rem; font-weight: 700;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .05em;
+    margin-bottom: .4rem;
+  }
+  .field-hint { font-size: .75rem; color: var(--muted); margin-top: .3rem; }
+  .field-input {
+    padding: .5rem .75rem; border: 1px solid var(--border); border-radius: 6px;
+    font-size: .9rem; font-family: monospace; background: var(--surface);
+    color: var(--text); width: 100%; max-width: 340px;
+  }
+  .field-input:focus { outline: none; border-color: var(--primary);
+                       box-shadow: 0 0 0 3px rgba(26,111,181,.12); }
+
+  /* provider config rows */
+  .prov-row {
+    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    padding: .85rem 1rem; border: 1px solid var(--border);
+    border-radius: 8px; margin-bottom: .75rem; background: var(--surface);
+  }
+  .prov-swatch {
+    width: 26px; height: 26px; border-radius: 50%;
+    border: 2px solid var(--border); flex-shrink: 0;
+  }
+  .prov-name { font-weight: 600; font-size: .9rem; flex: 1; min-width: 100px; }
+  .prov-field { display: flex; flex-direction: column; gap: .2rem; }
+  .prov-field label { font-size: .7rem; color: var(--muted); text-transform: uppercase;
+                      letter-spacing: .04em; font-weight: 600; }
+  .prov-field input[type=color] {
+    width: 52px; height: 32px; border: 1px solid var(--border);
+    border-radius: 5px; cursor: pointer; padding: 2px; background: var(--surface);
+  }
+  .prov-field input[type=number] {
+    width: 90px; padding: .35rem .55rem; border: 1px solid var(--border);
+    border-radius: 6px; font-size: .85rem; background: var(--surface); color: var(--text);
+  }
+  .prov-field input:focus { outline: none; border-color: var(--primary); }
+
+  /* location list */
+  .loc-list { display: flex; flex-direction: column; gap: .5rem; }
+  .loc-item {
+    display: flex; align-items: center; gap: .75rem;
+    padding: .75rem 1rem; border: 1px solid var(--border);
+    border-radius: 8px; background: var(--surface);
+    transition: box-shadow .1s;
+  }
+  .loc-item.dragging { opacity: .5; }
+  .loc-item.drag-over { box-shadow: 0 0 0 2px var(--primary); }
+  .loc-drag {
+    cursor: grab; color: var(--muted); font-size: 1.1rem;
+    padding: 0 .2rem; user-select: none; flex-shrink: 0;
+  }
+  .loc-drag:active { cursor: grabbing; }
+  .loc-item-name { font-weight: 600; flex: 1; }
+  .loc-item-meta { font-size: .75rem; color: var(--muted); }
+  .loc-item-actions { display: flex; gap: .4rem; flex-shrink: 0; }
+  .loc-hidden .loc-item-name { color: var(--muted); text-decoration: line-through; }
+  .toggle-btn {
+    padding: .28rem .65rem; border-radius: 5px; border: 1px solid var(--border);
+    background: var(--surface); cursor: pointer; font-size: .78rem;
+    color: var(--muted); transition: background .1s;
+  }
+  .toggle-btn:hover { background: var(--border); }
+  .toggle-btn.shown { color: var(--primary); border-color: var(--primary); background: #eff6ff; }
+
+  /* cron presets */
+  .cron-presets { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; }
+  .cron-preset {
+    padding: .3rem .65rem; border: 1px solid var(--border); border-radius: 5px;
+    font-size: .78rem; cursor: pointer; background: var(--surface); color: var(--text);
+    transition: background .1s;
+  }
+  .cron-preset:hover { background: #eff6ff; border-color: var(--primary); color: var(--primary); }
+
+  /* db browser (embedded) */
+  .db-tabs { display: flex; gap: .35rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+  .db-tab {
+    padding: .35rem .85rem; border-radius: 6px; text-decoration: none;
+    font-size: .85rem; font-weight: 500; color: var(--muted);
+    background: var(--surface); border: 1px solid var(--border);
+  }
+  .db-tab:hover { background: #f0f7ff; color: var(--primary); }
+  .db-tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .db-tab .count { font-size: .72rem; opacity: .75; margin-left: .3rem; }
+
+  .filter-bar { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; align-items: flex-end; }
+  .filter-group { display: flex; flex-direction: column; }
+  .filter-group label { font-size: .7rem; color: var(--muted); margin-bottom: .2rem; }
+  .filter-group input {
+    padding: .35rem .55rem; border: 1px solid var(--border);
+    border-radius: 6px; font-size: .78rem; width: 120px;
+  }
+  .filter-group input:focus { outline: none; border-color: var(--primary); }
+
+  .table-wrap { overflow-x: auto; }
+  .data-table { width: 100%; border-collapse: collapse; font-size: .78rem; white-space: nowrap; }
+  .data-table th {
+    background: var(--bg); font-weight: 600; text-align: left;
+    padding: .45rem .7rem; border-bottom: 2px solid var(--border);
+    position: sticky; top: 0; z-index: 1;
+  }
+  .data-table td {
+    padding: .38rem .7rem; border-bottom: 1px solid var(--border);
+    max-width: 280px; overflow: hidden; text-overflow: ellipsis;
+  }
+  .data-table tr:last-child td { border-bottom: none; }
+  .data-table tr:hover td { background: #f7fafd; }
+  .data-table td.null { color: var(--muted); font-style: italic; }
+  .data-table td.num { font-variant-numeric: tabular-nums; text-align: right; }
+
+  .pagination { display: flex; gap: .5rem; align-items: center; margin-top: 1rem; font-size: .85rem; }
+  .pagination a {
+    padding: .3rem .65rem; border: 1px solid var(--border); border-radius: 6px;
+    text-decoration: none; color: var(--primary); background: var(--surface);
+  }
+  .pagination a:hover { background: #f0f7ff; }
+  .pagination .info { color: var(--muted); flex: 1; }
+
+  /* log viewer */
+  #log-output {
+    font-family: 'Fira Mono', 'Consolas', monospace;
+    font-size: .75rem;
+    background: #0f172a;
+    color: #94a3b8;
+    border-radius: 8px;
+    padding: 1rem;
+    height: 520px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .log-INFO    { color: #94a3b8; }
+  .log-WARNING { color: #f59e0b; }
+  .log-ERROR   { color: #f87171; }
+  .log-CRITICAL{ color: #ff4444; font-weight: bold; }
+  .log-DEBUG   { color: #6b7280; }
+  .log-controls {
+    display: flex; gap: .75rem; align-items: center; margin-bottom: .75rem; flex-wrap: wrap;
+  }
+  .log-badge {
+    display: inline-block; padding: .1rem .45rem; border-radius: 4px;
+    font-size: .7rem; font-weight: 700;
+  }
+  .log-badge.INFO    { background: #1e3a5f; color: #93c5fd; }
+  .log-badge.WARNING { background: #451a03; color: #fcd34d; }
+  .log-badge.ERROR   { background: #450a0a; color: #fca5a5; }
+</style>
+
+<div style="display:flex; align-items:center; gap:1rem; margin-bottom:1.75rem;">
+  <a href="{{ url_for('index') }}" style="color:var(--muted); font-size:.82rem; text-decoration:none;">← Home</a>
+  <h1 style="font-size:1.4rem; font-weight:700; margin:0;">Settings</h1>
+</div>
+
+<div class="st-layout">
+
+  {# ── sidebar nav ── #}
+  <nav class="st-nav">
+    {% set tabs = [
+      ('schedule',  '⏰', 'Schedule'),
+      ('providers', '🎨', 'Providers'),
+      ('locations', '📍', 'Locations'),
+      ('database',  '🗄', 'Database'),
+      ('logs',      '📋', 'Logs'),
+    ] %}
+    {% for slug, icon, label in tabs %}
+    <a href="{{ url_for('settings_page', tab=slug) }}"
+       class="st-navitem {% if tab == slug %}active{% endif %}">
+      {{ icon }} {{ label }}
+    </a>
+    {% endfor %}
+  </nav>
+
+  {# ── content ── #}
+  <div class="st-section">
+
+    {# ════════════════════════════════════════ SCHEDULE ════════════════════════ #}
+    {% if tab == 'schedule' %}
+    <h2>Poll Schedule</h2>
+    <div class="card" style="max-width:560px;">
+      <form method="post" action="{{ url_for('settings_save_schedule') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+
+        <div class="field-row">
+          <label class="field-label">Cron expression (UTC)</label>
+          <div class="cron-presets">
+            {% for label, expr in [
+              ('06:00 daily',   '0 6 * * *'),
+              ('08:00 daily',   '0 8 * * *'),
+              ('Every 6 h',     '0 */6 * * *'),
+              ('Every 12 h',    '0 */12 * * *'),
+              ('Every hour',    '0 * * * *'),
+            ] %}
+            <button type="button" class="cron-preset"
+                    onclick="document.getElementById('cron_input').value='{{ expr }}'">
+              {{ label }}
+            </button>
+            {% endfor %}
+          </div>
+          <input type="text" name="poll_cron" id="cron_input" class="field-input"
+                 value="{{ all_settings.get('poll_cron', '0 6 * * *') }}"
+                 placeholder="0 6 * * *" style="font-family:monospace;">
+          <div class="field-hint">
+            Format: <code>minute hour day month weekday</code>
+            &nbsp;·&nbsp; All times UTC.
+          </div>
+        </div>
+
+        <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:6px;
+                    padding:.65rem .9rem; font-size:.8rem; color:#92400e; margin-bottom:1.25rem;">
+          ⚠ Schedule changes take effect after the poller process restarts.
+        </div>
+
+        <button type="submit" class="btn btn-primary">Save Schedule</button>
+      </form>
+    </div>
+
+    {# ════════════════════════════════════════ PROVIDERS ══════════════════════ #}
+    {% elif tab == 'providers' %}
+    <h2>Provider Settings</h2>
+    <form method="post" action="{{ url_for('settings_save_providers') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <div style="max-width:600px;">
+        {% for p in all_providers %}
+        {% set hex_color = stored_colors.get(p.name, '#3b82f6' if p.name == 'wetter_com' else '#22c55e') %}
+        {% set delay_val = stored_delays.get(p.name, 0.25) %}
+        <div class="prov-row">
+          <input type="color" id="swatch_{{ p.name }}" value="{{ hex_color }}"
+                 oninput="document.getElementById('color_{{ p.name }}').value=this.value;
+                          this.style.borderColor=this.value;"
+                 style="width:38px; height:38px; padding:2px; border-radius:6px;
+                        border:2px solid {{ hex_color }}; cursor:pointer; background:var(--surface);">
+          <div class="prov-name">{{ p.display_name }}</div>
+          <div class="prov-field">
+            <label>Hex color</label>
+            <input type="text" name="color_{{ p.name }}" id="color_{{ p.name }}"
+                   value="{{ hex_color }}" maxlength="7" style="width:95px; font-family:monospace;
+                   padding:.35rem .55rem; border:1px solid var(--border); border-radius:6px;
+                   font-size:.85rem; background:var(--surface);"
+                   oninput="if(this.value.match(/^#[0-9a-fA-F]{6}$/))
+                     document.getElementById('swatch_{{ p.name }}').value=this.value;">
+          </div>
+          <div class="prov-field">
+            <label>Request delay (s)</label>
+            <input type="number" name="delay_{{ p.name }}" value="{{ delay_val }}"
+                   min="0" max="30" step="0.05"
+                   style="width:90px; padding:.35rem .55rem; border:1px solid var(--border);
+                          border-radius:6px; font-size:.85rem; background:var(--surface);">
+          </div>
+        </div>
+        {% endfor %}
+        <div class="field-hint" style="margin-bottom:1.25rem;">
+          Request delay controls the pause between sequential HTTP requests within a single poll
+          (e.g. per-day detail pages). Does not apply between polls.
+        </div>
+        <button type="submit" class="btn btn-primary">Save Provider Settings</button>
+      </div>
+    </form>
+
+    {# ════════════════════════════════════════ LOCATIONS ══════════════════════ #}
+    {% elif tab == 'locations' %}
+    <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1.25rem;">
+      <h2 style="margin:0;">Locations</h2>
+      <a href="{{ url_for('index') }}?add=1" class="btn btn-primary btn-sm">+ Add Location</a>
+    </div>
+    {% if all_locations %}
+    <div class="loc-list" id="locList" style="max-width:620px;">
+      {% for loc in all_locations %}
+      <div class="loc-item {% if loc.hidden %}loc-hidden{% endif %}"
+           data-id="{{ loc.id }}"
+           draggable="true"
+           ondragstart="onDragStart(event)"
+           ondragover="onDragOver(event)"
+           ondrop="onDrop(event)"
+           ondragend="onDragEnd(event)">
+        <span class="loc-drag" title="Drag to reorder">⠿</span>
+        <div style="flex:1; min-width:0;">
+          <div class="loc-item-name">{{ loc.name }}</div>
+          <div class="loc-item-meta">
+            {{ '%.4f'|format(loc.latitude or 0) }}°, {{ '%.4f'|format(loc.longitude or 0) }}°
+            &nbsp;·&nbsp; {{ loc.providers or '—' }}
+            {% if loc.hidden %}&nbsp;·&nbsp; <span style="color:var(--muted);">hidden</span>{% endif %}
+          </div>
+        </div>
+        <div class="loc-item-actions">
+          <form method="post" action="{{ url_for('toggle_location_hidden', location_id=loc.id) }}"
+                style="display:contents;">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <button type="submit" class="toggle-btn {% if not loc.hidden %}shown{% endif %}"
+                    title="{{ 'Hide from front page' if not loc.hidden else 'Show on front page' }}">
+              {{ '👁 Shown' if not loc.hidden else '🚫 Hidden' }}
+            </button>
+          </form>
+          <form method="post" action="{{ url_for('delete_location', location_id=loc.id) }}"
+                onsubmit="return confirm('Delete {{ loc.name }} and all its data?')"
+                style="display:contents;">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" value="{{ url_for('settings_page', tab='locations') }}">
+            <button type="submit" class="btn btn-danger btn-sm">✕</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <div style="font-size:.78rem; color:var(--muted); margin-top:.75rem;">
+      Drag rows to reorder. Order is saved automatically.
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <p>No locations yet. <a href="{{ url_for('index') }}?add=1">Add one →</a></p>
+    </div>
+    {% endif %}
+
+    {# ════════════════════════════════════════ DATABASE ═══════════════════════ #}
+    {% elif tab == 'database' %}
+    <h2>Database</h2>
+
+    {# table tabs #}
+    <div class="db-tabs">
+      <a href="{{ url_for('settings_page', tab='database') }}"
+         class="db-tab {% if db_active_table is none %}active{% endif %}">Overview</a>
+      {% for t in db_tables %}
+      <a href="{{ db_table_urls[t.name] }}"
+         class="db-tab {% if t.name == db_active_table %}active{% endif %}">
+        {{ t.name }}<span class="count">{{ '{:,}'.format(t.count) }}</span>
+      </a>
+      {% endfor %}
+    </div>
+
+    {% if db_active_table is none %}
+    {# overview #}
+    <div class="card" style="max-width:720px;">
+      {% for t in db_tables %}
+      <div style="display:flex; justify-content:space-between; align-items:center;
+                  padding:.65rem 0; border-bottom:1px solid var(--border);">
+        <div>
+          <a href="{{ db_table_urls[t.name] }}"
+             style="font-weight:600; color:var(--primary); text-decoration:none;">{{ t.name }}</a>
+          <div style="font-size:.73rem; color:var(--muted); margin-top:.15rem;">
+            {{ t.cols|join(' &nbsp;·&nbsp; ')|safe }}
+          </div>
+        </div>
+        <span class="badge badge-blue">{{ '{:,}'.format(t.count) }} rows</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    {% else %}
+    {# table view #}
+    <div class="card">
+      <div style="display:flex; align-items:baseline; gap:1rem; margin-bottom:.85rem; flex-wrap:wrap;">
+        <span style="font-size:.82rem; color:var(--muted);">
+          {% if db_filtered_total != db_total %}
+            {{ '{:,}'.format(db_filtered_total) }} of {{ '{:,}'.format(db_total) }} rows match
+          {% else %}
+            {{ '{:,}'.format(db_total) }} rows
+          {% endif %}
+        </span>
+        {% if db_clear_url %}
+        <a href="{{ db_clear_url }}"
+           style="font-size:.78rem; color:var(--danger); text-decoration:none; margin-left:auto;">
+          ✕ clear filters
+        </a>
+        {% endif %}
+      </div>
+
+      <form method="get" class="filter-bar">
+        <input type="hidden" name="tab" value="database">
+        <input type="hidden" name="db_table" value="{{ db_active_table }}">
+        {% for col in db_cols %}
+        <div class="filter-group">
+          <label>{{ col }}</label>
+          <input type="text" name="f_{{ col }}" value="{{ db_filters.get(col, '') }}"
+                 placeholder="filter…">
+        </div>
+        {% endfor %}
+        <button type="submit" class="btn btn-primary btn-sm" style="align-self:flex-end;">Filter</button>
+      </form>
+
+      {% if db_rows %}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>{% for col in db_cols %}<th>{{ col }}</th>{% endfor %}</tr>
+          </thead>
+          <tbody>
+            {% for row in db_rows %}
+            <tr>
+              {% for val in row %}
+              {% if val is none %}
+              <td class="null">null</td>
+              {% elif val is number %}
+              <td class="num">{{ val }}</td>
+              {% else %}
+              <td title="{{ val }}">{{ val }}</td>
+              {% endif %}
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% set total_pages = ((db_filtered_total - 1) // db_page_size + 1) if db_filtered_total else 1 %}
+      {% if total_pages > 1 %}
+      <div class="pagination">
+        {% if db_prev_url %}<a href="{{ db_prev_url }}">← Prev</a>{% endif %}
+        <span class="info">
+          Page {{ db_page + 1 }} / {{ total_pages }}
+          &nbsp;·&nbsp; rows {{ db_page * db_page_size + 1 }}–{{ [(db_page+1) * db_page_size, db_filtered_total]|min }}
+        </span>
+        {% if db_next_url %}<a href="{{ db_next_url }}">Next →</a>{% endif %}
+      </div>
+      {% endif %}
+
+      {% else %}
+      <div style="text-align:center; padding:2rem; color:var(--muted);">
+        No rows match the current filters.
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {# ════════════════════════════════════════ LOGS ═══════════════════════════ #}
+    {% elif tab == 'logs' %}
+    <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1rem;">
+      <h2 style="margin:0;">Server Logs</h2>
+      <label style="display:flex; align-items:center; gap:.4rem; font-size:.82rem; cursor:pointer;">
+        <input type="checkbox" id="autoScroll" checked> Auto-scroll
+      </label>
+      <button class="btn btn-outline btn-sm" onclick="clearLog()">Clear</button>
+      <span id="log-status" style="font-size:.75rem; color:var(--muted);"></span>
+    </div>
+    <div id="log-output" role="log" aria-live="polite"></div>
+    <div style="font-size:.75rem; color:var(--muted); margin-top:.5rem;">
+      Showing logs from this web server process.
+      The poller process logs separately to its own stdout / log file.
+    </div>
+    {% endif %}
+
+  </div>{# /st-section #}
+</div>{# /st-layout #}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const CSRF = {{ csrf_token() | tojson }};
+
+{% if tab == 'locations' %}
+// ── drag-and-drop reorder ─────────────────────────────────────────────────
+let dragged = null;
+
+function onDragStart(e) {
+  dragged = e.currentTarget;
+  dragged.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+}
+function onDragOver(e) {
+  e.preventDefault();
+  e.currentTarget.classList.add('drag-over');
+  e.dataTransfer.dropEffect = 'move';
+}
+function onDrop(e) {
+  e.preventDefault();
+  const target = e.currentTarget;
+  target.classList.remove('drag-over');
+  if (!dragged || dragged === target) return;
+  const list = target.parentElement;
+  const items = [...list.children];
+  const fromIdx = items.indexOf(dragged);
+  const toIdx   = items.indexOf(target);
+  if (fromIdx < toIdx) target.after(dragged);
+  else target.before(dragged);
+  saveOrder();
+}
+function onDragEnd(e) {
+  e.currentTarget.classList.remove('dragging');
+  document.querySelectorAll('.loc-item').forEach(el => el.classList.remove('drag-over'));
+  dragged = null;
+}
+function saveOrder() {
+  const order = [...document.querySelectorAll('[data-id]')].map(el => el.dataset.id);
+  fetch('{{ url_for("reorder_locations") }}', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+    body: JSON.stringify({ order }),
+  });
+}
+{% endif %}
+
+{% if tab == 'logs' %}
+// ── log viewer ────────────────────────────────────────────────────────────
+let lastN = 0;
+const output = document.getElementById('log-output');
+const autoScroll = document.getElementById('autoScroll');
+const statusEl   = document.getElementById('log-status');
+
+function clearLog() { output.innerHTML = ''; }
+
+function levelClass(lvl) {
+  if (lvl === 'WARNING')  return 'log-WARNING';
+  if (lvl === 'ERROR' || lvl === 'CRITICAL') return 'log-ERROR';
+  if (lvl === 'DEBUG') return 'log-DEBUG';
+  return 'log-INFO';
+}
+
+async function fetchLogs() {
+  try {
+    const r = await fetch('/api/logs?since=' + lastN);
+    const data = await r.json();
+    if (data.lines && data.lines.length) {
+      const wasBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 40;
+      for (const l of data.lines) {
+        const span = document.createElement('span');
+        span.className = levelClass(l.level);
+        span.textContent = l.msg + '\n';
+        output.appendChild(span);
+        lastN = Math.max(lastN, l.n);
+      }
+      // Keep buffer manageable in the DOM
+      while (output.childNodes.length > 600) output.removeChild(output.firstChild);
+      if (autoScroll.checked && wasBottom) output.scrollTop = output.scrollHeight;
+    }
+    statusEl.textContent = 'Live · ' + new Date().toLocaleTimeString();
+  } catch (err) {
+    statusEl.textContent = 'Connection error';
+  }
+}
+
+fetchLogs();
+setInterval(fetchLogs, 2000);
+{% endif %}
+</script>
+{% endblock %}

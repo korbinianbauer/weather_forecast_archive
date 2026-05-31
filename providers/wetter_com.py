@@ -8,6 +8,7 @@ from urllib.parse import quote
 import requests
 from bs4 import BeautifulSoup
 
+import db
 from .base import ForecastEntry, LocationResult, WeatherProvider
 
 logger = logging.getLogger(__name__)
@@ -168,7 +169,7 @@ def _fetch_detail_extras(seo: str, loc_id: str) -> dict[str, dict]:
         except Exception as e:
             logger.warning('Wetter.com detail fetch +%d failed: %s', offset, e)
 
-        time.sleep(0.25)
+        time.sleep(db.get_provider_delay('wetter_com'))
 
     return result
 
