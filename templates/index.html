@@ -532,7 +532,22 @@ function buildTempTraces(rows, dates) {
         marker: { size: 5, color: line },
         connectgaps: false,
       });
-    } else if (!hasMx && !hasMn) {
+    } else if (hasMx || hasMn) {
+      traces.push({
+        x: dates, y: ymx, type: 'scatter', mode: 'lines+markers',
+        name: row.label, showlegend: false, _provider: row.provider,
+        line: { color: line, width: 2 },
+        marker: { size: 5, color: line, symbol: 'triangle-up' },
+        connectgaps: false,
+      });
+      traces.push({
+        x: dates, y: ymn, type: 'scatter', mode: 'lines+markers',
+        name: row.label, showlegend: false, _provider: row.provider,
+        line: { color: line, width: 2, dash: 'dot' },
+        marker: { size: 5, color: line, symbol: 'triangle-down' },
+        connectgaps: false,
+      });
+    } else {
       traces.push({
         x: dates, y: dates.map(() => null), type: 'scatter', mode: 'lines+markers',
         name: row.label, showlegend: false, _provider: row.provider,
