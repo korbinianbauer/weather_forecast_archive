@@ -350,7 +350,6 @@ function closeEvolution(locId) {
 }
 
 function togglePlot(locId) {
-  const rowsEl  = document.getElementById('rows-' + locId);
   const plotEl  = document.getElementById('plot-' + locId);
   const btn     = document.getElementById('plotbtn-' + locId);
   const showing = plotEl.classList.contains('visible');
@@ -359,12 +358,10 @@ function togglePlot(locId) {
 
   if (showing) {
     plotEl.classList.remove('visible');
-    rowsEl.style.display = '';
     btn.textContent = '📈 Plot Forecast';
   } else {
-    rowsEl.style.display = 'none';
     plotEl.classList.add('visible');
-    btn.textContent = '📋 Table';
+    btn.textContent = 'Close Plot';
     if (!plotRendered[locId]) {
       renderPlot(locId);
       plotRendered[locId] = true;
@@ -531,7 +528,6 @@ function renderEvolutionInline(locId, data) {
 function openEvolution(locId, date) {
   const evoEl  = document.getElementById('evo-' + locId);
   const plotEl = document.getElementById('plot-' + locId);
-  const rowsEl = document.getElementById('rows-' + locId);
   const btn    = document.getElementById('plotbtn-' + locId);
 
   document.querySelectorAll(`.day-cell[data-loc="${locId}"]`).forEach(el => el.classList.remove('evo-active'));
@@ -545,7 +541,6 @@ function openEvolution(locId, date) {
 
   if (plotEl.classList.contains('visible')) {
     plotEl.classList.remove('visible');
-    rowsEl.style.display = '';
     btn.textContent = '📈 Plot Forecast';
   }
 
