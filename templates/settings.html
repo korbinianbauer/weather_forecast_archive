@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Settings — Weather Archive{% endblock %}
+{% block main_style %}max-width:none;{% endblock %}
 
 {% block content %}
 <style>
@@ -9,6 +10,7 @@
     gap: 1.75rem;
     align-items: start;
   }
+
   @media (max-width: 640px) {
     .st-layout { grid-template-columns: 1fr; }
     .st-nav { display: flex; flex-wrap: wrap; flex-direction: row !important; gap: .3rem; }
@@ -17,22 +19,28 @@
   .st-nav {
     display: flex;
     flex-direction: column;
-    gap: .2rem;
+    gap: 2px;
     position: sticky;
     top: 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: .4rem;
+    overflow: hidden;
   }
   .st-navitem {
-    display: flex; align-items: center; gap: .55rem;
+    display: flex; align-items: center;
     padding: .55rem .9rem;
-    border-radius: 7px;
+    border-radius: calc(var(--radius) - 4px);
     text-decoration: none;
     font-size: .875rem;
     font-weight: 500;
     color: var(--text);
-    transition: background .1s;
+    transition: background .1s, color .1s;
     white-space: nowrap;
   }
-  .st-navitem:hover { background: var(--border); }
+  .st-navitem:hover { background: var(--bg); }
   .st-navitem.active { background: var(--primary); color: #fff; }
 
   .st-section h2 { font-size: 1.25rem; margin-bottom: 1.5rem; }
@@ -98,9 +106,10 @@
   .toggle-btn {
     padding: .28rem .65rem; border-radius: 5px; border: 1px solid var(--border);
     background: var(--surface); cursor: pointer; font-size: .78rem;
-    color: var(--muted); transition: background .1s;
+    color: var(--muted); transition: background .1s, color .1s, border-color .1s;
+    font-weight: 500; letter-spacing: .01em;
   }
-  .toggle-btn:hover { background: var(--border); }
+  .toggle-btn:hover { background: var(--border); color: var(--text); }
   .toggle-btn.shown { color: var(--primary); border-color: var(--primary); background: #eff6ff; }
 
   /* cron presets */
@@ -186,9 +195,9 @@
   .log-badge.ERROR   { background: #450a0a; color: #fca5a5; }
 </style>
 
-<div style="display:flex; align-items:center; gap:1rem; margin-bottom:1.75rem;">
-  <a href="{{ url_for('index') }}" style="color:var(--muted); font-size:.82rem; text-decoration:none;">← Home</a>
-  <h1 style="font-size:1.4rem; font-weight:700; margin:0;">Settings</h1>
+<div style="display:flex; align-items:baseline; gap:.75rem; margin-bottom:1.75rem; border-bottom:1px solid var(--border); padding-bottom:1rem;">
+  <h1 style="font-size:1.25rem; font-weight:700; margin:0;">Settings</h1>
+  <a href="{{ url_for('index') }}" style="color:var(--muted); font-size:.8rem; text-decoration:none; margin-left:auto;">← Back</a>
 </div>
 
 <div class="st-layout">
@@ -196,16 +205,16 @@
   {# ── sidebar nav ── #}
   <nav class="st-nav">
     {% set tabs = [
-      ('schedule',  '⏰', 'Schedule'),
-      ('providers', '🎨', 'Providers'),
-      ('locations', '📍', 'Locations'),
-      ('database',  '🗄', 'Database'),
-      ('logs',      '📋', 'Logs'),
+      ('schedule',  'Schedule'),
+      ('providers', 'Providers'),
+      ('locations', 'Locations'),
+      ('database',  'Database'),
+      ('logs',      'Logs'),
     ] %}
-    {% for slug, icon, label in tabs %}
+    {% for slug, label in tabs %}
     <a href="{{ url_for('settings_page', tab=slug) }}"
        class="st-navitem {% if tab == slug %}active{% endif %}">
-      {{ icon }} {{ label }}
+      {{ label }}
     </a>
     {% endfor %}
   </nav>
@@ -245,9 +254,9 @@
           </div>
         </div>
 
-        <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:6px;
-                    padding:.65rem .9rem; font-size:.8rem; color:#92400e; margin-bottom:1.25rem;">
-          ⚠ Schedule changes take effect after the poller process restarts.
+        <div style="background:#fafaf7; border:1px solid #e5e0c8; border-radius:6px;
+                    padding:.65rem .9rem; font-size:.8rem; color:#6b6040; margin-bottom:1.25rem;">
+          Schedule changes take effect after the poller process restarts.
         </div>
 
         <button type="submit" class="btn btn-primary">Save Schedule</button>
@@ -300,7 +309,7 @@
     {% elif tab == 'locations' %}
     <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1.25rem;">
       <h2 style="margin:0;">Locations</h2>
-      <a href="{{ url_for('index') }}?add=1" class="btn btn-primary btn-sm">+ Add Location</a>
+      <a href="{{ url_for('index') }}?add=1" class="btn btn-outline btn-sm" style="margin-left:auto;">Add location</a>
     </div>
     {% if all_locations %}
     <div class="loc-list" id="locList" style="max-width:620px;">
@@ -327,7 +336,7 @@
             <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
             <button type="submit" class="toggle-btn {% if not loc.hidden %}shown{% endif %}"
                     title="{{ 'Hide from front page' if not loc.hidden else 'Show on front page' }}">
-              {{ '👁 Shown' if not loc.hidden else '🚫 Hidden' }}
+              {{ 'Visible' if not loc.hidden else 'Hidden' }}
             </button>
           </form>
           <form method="post" action="{{ url_for('delete_location', location_id=loc.id) }}"
