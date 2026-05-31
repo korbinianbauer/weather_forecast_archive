@@ -201,8 +201,6 @@ def index():
     provider_labels = {p.name: p.display_name for p in providers.all_providers()}
 
     location_data = []
-    global_dates: set[str] = set()
-
     for loc in locs:
         sources = db.get_location_sources(loc['id'])
         rows = []
@@ -218,15 +216,13 @@ def index():
                 'by_date': by_date,
             })
 
-        global_dates.update(all_dates)
         location_data.append({
             'location': loc,
             'all_dates': sorted(all_dates),
             'rows': rows,
         })
 
-    global_sorted = sorted(global_dates)
-    default_start = global_sorted[0] if global_sorted else _date.today().isoformat()
+    default_start = _date.today().isoformat()
     date_start = request.args.get('start', default_start)
 
     try:

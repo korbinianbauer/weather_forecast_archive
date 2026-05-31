@@ -27,7 +27,6 @@
     padding: .35rem .15rem; text-align: center;
     background: var(--surface); overflow: hidden; min-width: 0;
   }
-  .day-cell.empty { background: transparent; border-color: transparent; }
   div.day-cell { cursor: pointer; }
   div.day-cell[data-dow="sat"] { background: rgba(255,200,100,0.075); }
   div.day-cell[data-dow="sun"] { background: rgba(255,150,50,0.125); }
@@ -135,7 +134,15 @@
               {% endif %}
             </div>
             {% else %}
-            <div class="day-cell empty"></div>
+            <div class="day-cell"
+                 data-loc="{{ loc.id }}" data-date="{{ d }}" data-provider="{{ row.provider }}"
+                 onclick="openEvolution({{ loc.id }}, '{{ d }}')"
+                 title="No data for {{ d }}">
+              <div class="dc-date">{{ d[8:] }}.{{ d[5:7] }}.</div>
+              <div style="height:34px; display:flex; align-items:center; justify-content:center;
+                          font-size:1rem; color:var(--border);">—</div>
+              <div class="dc-temps" style="color:var(--muted);">—</div>
+            </div>
             {% endif %}
             {% endfor %}
           </div>
