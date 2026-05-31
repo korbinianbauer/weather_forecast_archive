@@ -29,8 +29,8 @@
   }
   .day-cell.empty { background: transparent; border-color: transparent; }
   div.day-cell { cursor: pointer; }
-  div.day-cell:hover { border-color: var(--primary); background: #eff6ff; }
-  div.day-cell.evo-active { border-color: var(--primary); background: #eff6ff; outline: 2px solid var(--primary); outline-offset: -2px; }
+  div.day-cell.col-hover { border-color: var(--primary); background: #eff6ff; }
+  div.day-cell.evo-active { border-color: var(--primary); background: #dbeafe; outline: 2px solid var(--primary); outline-offset: -2px; }
   .evolution-view { margin-top: .75rem; }
   .day-cell .dc-date { font-size: .62rem; font-weight: 700; color: var(--muted); white-space: nowrap; }
   .day-cell img.dc-icon { width: 30px; height: 30px; display: block; margin: .2rem auto; }
@@ -99,7 +99,7 @@
             {% if e %}
             <div class="day-cell"
                  data-loc="{{ loc.id }}" data-date="{{ d }}" data-provider="{{ row.provider }}"
-                 onclick="openEvolution({{ loc.id }}, '{{ d }}', '{{ row.provider }}')"
+                 onclick="openEvolution({{ loc.id }}, '{{ d }}')"
                  title="View forecast evolution for {{ d }}">
               <div class="dc-date">{{ d[8:] }}.{{ d[5:7] }}.</div>
               {% if e.icon_url %}
@@ -528,7 +528,7 @@ function renderEvolutionInline(locId, data) {
   }
 }
 
-function openEvolution(locId, date, provider) {
+function openEvolution(locId, date) {
   const evoEl  = document.getElementById('evo-' + locId);
   const plotEl = document.getElementById('plot-' + locId);
   const rowsEl = document.getElementById('rows-' + locId);
@@ -537,7 +537,7 @@ function openEvolution(locId, date, provider) {
   document.querySelectorAll(`.day-cell[data-loc="${locId}"]`).forEach(el => el.classList.remove('evo-active'));
 
   const prev = evoState[locId];
-  if (prev && prev.date === date && prev.provider === provider) {
+  if (prev && prev.date === date) {
     delete evoState[locId];
     evoEl.style.display = 'none';
     return;
@@ -549,26 +549,45 @@ function openEvolution(locId, date, provider) {
     btn.textContent = '📈 Plot Forecast';
   }
 
-  const cell = document.querySelector(`.day-cell[data-loc="${locId}"][data-date="${date}"][data-provider="${provider}"]`);
-  if (cell) cell.classList.add('evo-active');
+  document.querySelectorAll(`.day-cell[data-loc="${locId}"][data-date="${date}"]`).forEach(el => el.classList.add('evo-active'));
 
-  evoState[locId] = { date, provider };
+  evoState[locId] = { date };
   evoEl.style.display = '';
 
   const chartsEl = document.getElementById('evo-charts-' + locId);
   chartsEl.innerHTML = '<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">Loading…</div>';
 
-  fetch(`/api/location/${locId}/evolution?date=${encodeURIComponent(date)}&providers=${encodeURIComponent(provider)}`)
+  fetch(`/api/location/${locId}/evolution?date=${encodeURIComponent(date)}`)
     .then(r => r.json())
     .then(data => {
       const cur = evoState[locId];
-      if (!cur || cur.date !== date || cur.provider !== provider) return;
+      if (!cur || cur.date !== date) return;
       renderEvolutionInline(locId, data);
     })
     .catch(() => {
       chartsEl.innerHTML = '<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">Failed to load evolution data.</div>';
     });
 }
+
+// Column hover: highlight all cards with same loc+date
+const _colHoverTimers = {};
+document.addEventListener('mouseover', e => {
+  const cell = e.target.closest('.day-cell[data-date]');
+  if (!cell || cell.classList.contains('empty')) return;
+  const { loc, date } = cell.dataset;
+  clearTimeout(_colHoverTimers[loc + ':' + date]);
+  document.querySelectorAll(`.day-cell[data-loc="${loc}"][data-date="${date}"]`)
+    .forEach(el => el.classList.add('col-hover'));
+});
+document.addEventListener('mouseout', e => {
+  const cell = e.target.closest('.day-cell[data-date]');
+  if (!cell || cell.classList.contains('empty')) return;
+  const { loc, date } = cell.dataset;
+  _colHoverTimers[loc + ':' + date] = setTimeout(() => {
+    document.querySelectorAll(`.day-cell[data-loc="${loc}"][data-date="${date}"]`)
+      .forEach(el => el.classList.remove('col-hover'));
+  }, 60);
+});
 
 const FLOOR0 = new Set(['sun','precip_prob','precip_amt','wind','cloud','humidity',
   'sunshine_hours','precipitation_precip_probability','precipitation_precip_amount',
