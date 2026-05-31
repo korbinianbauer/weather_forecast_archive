@@ -29,23 +29,6 @@
       </select>
     </div>
 
-    <div>
-      <label style="display:block; font-size:.8rem; font-weight:600; color:var(--muted); margin-bottom:.3rem;">
-        PROVIDERS
-      </label>
-      <div style="display:flex; gap:.75rem; flex-wrap:wrap; padding-top:.2rem;">
-        {% for p in all_providers %}
-        <label style="display:flex; align-items:center; gap:.35rem; font-size:.875rem; cursor:pointer;">
-          <input type="checkbox" name="providers" value="{{ p }}"
-                 {% if p in selected_providers %}checked{% endif %}
-                 style="accent-color:var(--primary);"
-                 onchange="this.form.submit();">
-          {{ provider_labels.get(p, p) }}
-        </label>
-        {% endfor %}
-      </div>
-    </div>
-
   </form>
 
   {% if target_date %}
@@ -110,9 +93,42 @@
   earliest16.setDate(earliest16.getDate() - 16);
   const xRangeStart = dataStart < earliest16.toISOString().slice(0, 19) ? dataStart : earliest16.toISOString().slice(0, 19);
 
+  // Collect unique legend entries before suppressing showlegend
+  const legendEntries = [];
+  const legendSeen = new Set();
+  for (const t of tracesAll) {
+    if (t.showlegend && t.name && !legendSeen.has(t.name)) {
+      legendSeen.add(t.name);
+      legendEntries.push({ name: t.name, color: (t.line || {}).color || '#888' });
+    }
+  }
+  tracesAll.forEach(t => { t.showlegend = false; });
+
+  const container = document.getElementById('charts-container');
+
+  // Build legend with checkboxes; store refs for later handler attachment
+  const legendItems = {}; // name -> { el, cb }
+  if (legendEntries.length) {
+    const legendEl = document.createElement('div');
+    legendEl.className = 'plot-legend';
+    legendEl.style.marginBottom = '1rem';
+    for (const e of legendEntries) {
+      const item = document.createElement('label');
+      item.className = 'plot-legend-item';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = true;
+      item.appendChild(cb);
+      item.insertAdjacentHTML('beforeend',
+        `<span class="plot-legend-swatch" style="background:${e.color}"></span>${e.name}`);
+      legendEl.appendChild(item);
+      legendItems[e.name] = { el: item, cb };
+    }
+    container.appendChild(legendEl);
+  }
+
   const metricsPresent = new Set(tracesAll.map(t => t.metric));
   const allMetrics = METRIC_ORDER.filter(m => metricsPresent.has(m));
-  const container = document.getElementById('charts-container');
   const divIds = [];
 
   for (const metric of allMetrics) {
@@ -133,24 +149,20 @@
     divIds.push(divId);
   }
 
-  const isFirst = {};
-  for (const m of allMetrics) isFirst[m] = true;
+  const traceMap = {}; // divId -> { name -> [traceIndices] }
 
   for (let mi = 0; mi < allMetrics.length; mi++) {
     const metric = allMetrics[mi];
-    const traces = tracesAll
-      .filter(t => t.metric === metric)
-      .map(t => {
-        const tr = Object.assign({}, t);
-        // Show legend only in the first chart where this trace appears
-        if (tr.showlegend && !isFirst[metric]) tr.showlegend = false;
-        return tr;
-      });
+    const traces = tracesAll.filter(t => t.metric === metric);
+    const divId = divIds[mi];
 
-    if (isFirst[metric]) isFirst[metric] = false;
+    traceMap[divId] = {};
+    traces.forEach((t, i) => {
+      if (t.name) (traceMap[divId][t.name] ||= []).push(i);
+    });
 
     const layout = {
-      margin:      { t: 10, b: 80, l: 60, r: 20 },
+      margin:      { t: 10, b: 50, l: 60, r: 20 },
       xaxis: {
         type: 'date',
         title: { text: 'Poll timestamp (' + tzName + ')', standoff: 8 },
@@ -162,14 +174,22 @@
       yaxis:       { gridcolor: '#e2e8f0', zeroline: false, fixedrange: true },
       paper_bgcolor: 'rgba(0,0,0,0)',
       plot_bgcolor:  '#f8fafc',
-      legend: { orientation: 'h', yanchor: 'top', y: -0.28, xanchor: 'left', x: 0 },
+      showlegend:  false,
       hovermode:   'x unified',
       font:        { family: 'system-ui, -apple-system, sans-serif', size: 12 },
     };
 
-    Plotly.newPlot(divIds[mi], traces, layout, { responsive: true, displayModeBar: false });
+    Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
   }
 
+  for (const [name, { cb }] of Object.entries(legendItems)) {
+    cb.addEventListener('change', () => {
+      for (const [divId, nameMap] of Object.entries(traceMap)) {
+        const indices = nameMap[name] || [];
+        if (indices.length) Plotly.restyle(divId, { visible: cb.checked }, indices);
+      }
+    });
+  }
 
 })();
 </script>
