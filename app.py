@@ -424,6 +424,29 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
     return all_traces
 
 
+@app.route('/api/location/<int:location_id>/evolution')
+def api_evolution(location_id):
+    location = db.get_location(location_id)
+    if not location:
+        return jsonify({'error': 'not found'}), 404
+    target_date = request.args.get('date', '')
+    if not target_date:
+        return jsonify({'error': 'missing date'}), 400
+    sources = db.get_location_sources(location_id)
+    all_provider_names = [s['provider'] for s in sources]
+    provider_labels_map = {p.name: p.display_name for p in providers.all_providers()}
+    url_providers = request.args.getlist('providers')
+    default_provider = url_providers[0] if len(url_providers) == 1 else None
+    rows = db.get_forecast_evolution(location_id, target_date, all_provider_names)
+    traces = _build_evolution_traces(rows, provider_labels_map)
+    return jsonify({
+        'traces': traces,
+        'target_date': target_date,
+        'provider_labels': provider_labels_map,
+        'default_provider': default_provider,
+    })
+
+
 @app.route('/location/<int:location_id>/add_source', methods=['POST'])
 @login_required
 @csrf_protect
