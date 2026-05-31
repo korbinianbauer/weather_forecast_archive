@@ -352,8 +352,8 @@ function togglePlot(locId) {
   }
 }
 
-const FLOOR0 = new Set(['sun','precip_prob','precip_amt','wind']);
-const CAP100 = new Set(['precip_prob']);
+const FLOOR0 = new Set(['sun','precip_prob','precip_amt','wind','cloud','humidity']);
+const CAP100 = new Set(['precip_prob','cloud','humidity']);
 
 function yRangeFromTraces(traces, metricId) {
   let mn = Infinity, mx = -Infinity;
@@ -439,6 +439,9 @@ function renderPlot(locId) {
     { id: 'precip_prob',  label: 'Precipitation probability %', field: 'precip_probability' },
     { id: 'precip_amt',   label: 'Precipitation mm',            field: 'precip_amount' },
     { id: 'wind',         label: 'Wind speed km/h',             field: 'wind_speed' },
+    { id: 'cloud',        label: 'Cloud cover %',               field: 'cloud_cover' },
+    { id: 'pressure',     label: 'Pressure hPa',                field: 'pressure' },
+    { id: 'humidity',     label: 'Humidity %',                  field: 'humidity' },
   ];
 
   const plotDivs = [];
