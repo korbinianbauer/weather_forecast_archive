@@ -390,7 +390,7 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
                 'x': xs, 'y': ymn,
                 'type': 'scatter', 'mode': 'lines+markers',
                 'name': label, 'showlegend': False,
-                'line': {'color': color, 'width': 2, 'dash': 'dot'},
+                'line': {'color': color, 'width': 2},
                 'marker': {'size': 6, 'color': color, 'symbol': 'triangle-down'},
                 'metric': 'temperature', 'legendgroup': label,
             })

@@ -352,7 +352,10 @@ function togglePlot(locId) {
   }
 }
 
-function yRangeFromTraces(traces) {
+const FLOOR0 = new Set(['sun','precip_prob','precip_amt','wind']);
+const CAP100 = new Set(['precip_prob']);
+
+function yRangeFromTraces(traces, metricId) {
   let mn = Infinity, mx = -Infinity;
   for (const t of traces) {
     for (const v of (t.y || [])) {
@@ -364,7 +367,33 @@ function yRangeFromTraces(traces) {
   }
   if (!isFinite(mn)) return null;
   const pad = (mx - mn) * 0.08 || 1;
-  return [mn - pad, mx + pad];
+  return [FLOOR0.has(metricId) ? 0 : mn - pad, CAP100.has(metricId) ? 100 : mx + pad];
+}
+
+const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function buildAxisDecorations(x0Str, x1Str) {
+  const shapes = [], tickvals = [], ticktext = [];
+  const [y0, m0, d0] = x0Str.slice(0, 10).split('-').map(Number);
+  const [y1, m1, d1] = x1Str.slice(0, 10).split('-').map(Number);
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  let cur = new Date(y0, m0-1, d0);
+  const end = new Date(y1, m1-1, d1);
+  while (cur <= end) {
+    const ds = fmt(cur), dow = cur.getDay();
+    const next = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate()+1);
+    const ns = fmt(next);
+    if (dow === 6)
+      shapes.push({type:'rect',xref:'x',yref:'paper',x0:ds+'T00:00:00',x1:ns+'T00:00:00',y0:0,y1:1,fillcolor:'rgba(255,200,100,0.075)',line:{width:0},layer:'below'});
+    else if (dow === 0)
+      shapes.push({type:'rect',xref:'x',yref:'paper',x0:ds+'T00:00:00',x1:ns+'T00:00:00',y0:0,y1:1,fillcolor:'rgba(255,150,50,0.125)',line:{width:0},layer:'below'});
+    shapes.push({type:'line',xref:'x',yref:'paper',x0:ds+'T00:00:00',x1:ds+'T00:00:00',y0:0,y1:1,line:{color:'#e2e8f0',width:1},layer:'below'});
+    tickvals.push(ds+'T12:00:00');
+    ticktext.push(DAYS[dow]+'<br>'+String(cur.getDate()).padStart(2,'0')+'.'+String(cur.getMonth()+1).padStart(2,'0')+'.');
+    cur = next;
+  }
+  const last = new Date(y1, m1-1, d1+1);
+  shapes.push({type:'line',xref:'x',yref:'paper',x0:fmt(last)+'T00:00:00',x1:fmt(last)+'T00:00:00',y0:0,y1:1,line:{color:'#e2e8f0',width:1},layer:'below'});
+  return { shapes, tickvals, ticktext };
 }
 
 function buildLegend(rows) {
@@ -398,6 +427,11 @@ function renderPlot(locId) {
 
   const { el: legendEl, items: legendItems } = buildLegend(loc.rows);
   container.appendChild(legendEl);
+
+  const axDec = buildAxisDecorations(dates[0], dates[dates.length - 1]);
+  const [_ey, _em, _ed] = dates[dates.length - 1].split('-').map(Number);
+  const _xEnd = new Date(_ey, _em-1, _ed+1);
+  const xEndStr = `${_xEnd.getFullYear()}-${String(_xEnd.getMonth()+1).padStart(2,'0')}-${String(_xEnd.getDate()).padStart(2,'0')}T00:00:00`;
 
   const metrics = [
     { id: 'temp',         label: 'Temperature °C',              render: (rows) => buildTempTraces(rows, dates) },
@@ -437,10 +471,17 @@ function renderPlot(locId) {
       if (t._provider) (traceMap[div.id][t._provider] ||= []).push(i);
     });
 
-    const yr = yRangeFromTraces(traces);
+    const yr = yRangeFromTraces(traces, metric.id);
     const layout = {
       margin: { t: 8, b: 36, l: 50, r: 12 },
-      xaxis: { type: 'date', tickformat: '%d.%m', gridcolor: '#e2e8f0' },
+      xaxis: {
+        type: 'date',
+        showgrid: false,
+        tickmode: 'array',
+        tickvals: axDec.tickvals,
+        ticktext: axDec.ticktext,
+        range: [dates[0] + 'T00:00:00', xEndStr],
+      },
       yaxis: { gridcolor: '#e2e8f0', zeroline: false,
                ...(yr ? { range: yr, autorange: false } : {}) },
       paper_bgcolor: 'rgba(0,0,0,0)',
@@ -448,6 +489,7 @@ function renderPlot(locId) {
       showlegend: false,
       hovermode: 'x unified',
       font: { family: 'system-ui,-apple-system,sans-serif', size: 11 },
+      shapes: axDec.shapes,
     };
 
     Plotly.newPlot(div.id, traces, layout, { responsive: true, displayModeBar: false });
@@ -543,7 +585,7 @@ function buildTempTraces(rows, dates) {
       traces.push({
         x: dates, y: ymn, type: 'scatter', mode: 'lines+markers',
         name: row.label, showlegend: false, _provider: row.provider,
-        line: { color: line, width: 2, dash: 'dot' },
+        line: { color: line, width: 2 },
         marker: { size: 5, color: line, symbol: 'triangle-down' },
         connectgaps: false,
       });
