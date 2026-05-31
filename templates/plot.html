@@ -92,7 +92,6 @@
     return [FLOOR0.has(metric) ? 0 : mn - pad, CAP100.has(metric) ? 100 : mx + pad];
   }
 
-  const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   function buildAxisDecorations(x0Str, x1Str) {
     const shapes = [], tickvals = [], ticktext = [];
     const [y0, m0, d0] = x0Str.slice(0, 10).split('-').map(Number);
@@ -100,6 +99,7 @@
     const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     let cur = new Date(y0, m0-1, d0);
     const end = new Date(y1, m1-1, d1);
+    const tgt = new Date(targetDate + 'T00:00:00');
     while (cur <= end) {
       const ds = fmt(cur), dow = cur.getDay();
       const next = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate()+1);
@@ -109,8 +109,10 @@
       else if (dow === 0)
         shapes.push({type:'rect',xref:'x',yref:'paper',x0:ds+'T00:00:00',x1:ns+'T00:00:00',y0:0,y1:1,fillcolor:'rgba(255,150,50,0.125)',line:{width:0},layer:'below'});
       shapes.push({type:'line',xref:'x',yref:'paper',x0:ds+'T00:00:00',x1:ds+'T00:00:00',y0:0,y1:1,line:{color:'#e2e8f0',width:1},layer:'below'});
+      const diffDays = Math.round((tgt - cur) / 86400000);
+      const dayLabel = diffDays === 0 ? '0d' : '-' + diffDays + 'd';
       tickvals.push(ds+'T12:00:00');
-      ticktext.push(DAYS[dow]+'<br>'+String(cur.getDate()).padStart(2,'0')+'.'+String(cur.getMonth()+1).padStart(2,'0')+'.');
+      ticktext.push(dayLabel+'<br>'+String(cur.getDate()).padStart(2,'0')+'.'+String(cur.getMonth()+1).padStart(2,'0')+'.');
       cur = next;
     }
     const last = new Date(y1, m1-1, d1+1);
