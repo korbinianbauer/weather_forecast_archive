@@ -70,6 +70,11 @@ def init_db():
                 metadata             TEXT NOT NULL DEFAULT '{}',
                 UNIQUE(location_id, provider)
             );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL DEFAULT ''
+            );
         ''')
 
         if 'forecast_snapshots' not in existing_tables:
@@ -79,6 +84,22 @@ def init_db():
             _add_columns_if_missing(conn, 'forecast_snapshots', {
                 'sunshine_hours': 'REAL',
             })
+
+        _add_columns_if_missing(conn, 'locations', {
+            'sort_order': 'INTEGER DEFAULT 0',
+            'hidden':     'INTEGER DEFAULT 0',
+        })
+        _init_default_settings(conn)
+
+
+def _init_default_settings(conn):
+    defaults = {
+        'poll_cron':        '0 6 * * *',
+        'provider_colors':  json.dumps({'wetter_com': '#3b82f6', 'meteoblue': '#22c55e'}),
+        'provider_delays':  json.dumps({'wetter_com': 0.25, 'meteoblue': 0.25}),
+    }
+    for key, val in defaults.items():
+        conn.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (key, val))
 
 
 def _add_columns_if_missing(conn, table: str, columns: dict[str, str]):
@@ -94,7 +115,6 @@ def _migrate_forecast_time(conn):
     if 'forecast_date' not in cols:
         return  # already on new schema
 
-    # Backfill forecast_time if the column exists but rows are unfilled
     if 'forecast_time' not in cols:
         conn.execute("ALTER TABLE forecast_snapshots ADD COLUMN forecast_time TEXT")
     conn.execute("""
@@ -104,7 +124,6 @@ def _migrate_forecast_time(conn):
         WHERE forecast_time IS NULL
     """)
 
-    # Rebuild table without forecast_date / forecast_hour
     conn.executescript(f'''
         CREATE TABLE forecast_snapshots_new {_SNAPSHOT_DDL.split("CREATE TABLE forecast_snapshots")[1]};
         INSERT INTO forecast_snapshots_new
@@ -135,6 +154,32 @@ def get_db():
         raise
     finally:
         conn.close()
+
+
+# ── settings ──────────────────────────────────────────────────────────────────
+
+def get_setting(key: str, default: str = '') -> str:
+    with get_db() as conn:
+        row = conn.execute('SELECT value FROM settings WHERE key = ?', (key,)).fetchone()
+        return row[0] if row else default
+
+
+def set_setting(key: str, value: str):
+    with get_db() as conn:
+        conn.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, value))
+
+
+def get_all_settings() -> dict[str, str]:
+    with get_db() as conn:
+        return {r[0]: r[1] for r in conn.execute('SELECT key, value FROM settings')}
+
+
+def get_provider_delay(provider: str) -> float:
+    try:
+        delays = json.loads(get_setting('provider_delays', '{}'))
+        return max(0.0, float(delays.get(provider, 0.25)))
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return 0.25
 
 
 # ── locations ─────────────────────────────────────────────────────────────────
@@ -183,9 +228,10 @@ def get_location_sources(location_id: int) -> list[dict]:
         return result
 
 
-def get_locations() -> list[dict]:
+def get_locations(show_hidden: bool = False) -> list[dict]:
+    hidden_clause = '' if show_hidden else 'WHERE COALESCE(l.hidden, 0) = 0'
     with get_db() as conn:
-        return [dict(r) for r in conn.execute('''
+        return [dict(r) for r in conn.execute(f'''
             SELECT l.*,
                    (SELECT MAX(fetched_at) FROM forecast_snapshots
                     WHERE location_id = l.id)                          AS last_polled,
@@ -193,13 +239,30 @@ def get_locations() -> list[dict]:
                     WHERE location_id = l.id)                          AS poll_count,
                    (SELECT GROUP_CONCAT(provider, ', ') FROM location_sources
                     WHERE location_id = l.id)                          AS providers
-            FROM locations l ORDER BY l.name
+            FROM locations l {hidden_clause}
+            ORDER BY COALESCE(l.sort_order, 0), l.id
         ''')]
 
 
 def delete_location(location_id: int):
     with get_db() as conn:
         conn.execute('DELETE FROM locations WHERE id = ?', (location_id,))
+
+
+def toggle_location_hidden(location_id: int):
+    with get_db() as conn:
+        conn.execute(
+            'UPDATE locations SET hidden = 1 - COALESCE(hidden, 0) WHERE id = ?',
+            (location_id,),
+        )
+
+
+def update_location_sort_order(location_id: int, sort_order: int):
+    with get_db() as conn:
+        conn.execute(
+            'UPDATE locations SET sort_order = ? WHERE id = ?',
+            (sort_order, location_id),
+        )
 
 
 # ── forecast snapshots ────────────────────────────────────────────────────────
@@ -327,11 +390,6 @@ def get_polls_covering_date(
     target_date: str,
     providers: list[str] | None = None,
 ) -> list[dict]:
-    """
-    Find every poll that includes a forecast entry for target_date, then
-    return ALL entries from that poll up to and including target_date.
-    Each item: {fetched_at, provider, granularity, entries: [dict, ...]}.
-    """
     with get_db() as conn:
         if providers:
             ph = ','.join('?' * len(providers))
@@ -376,10 +434,6 @@ def get_forecast_evolution(
     target_date: str,
     providers: list[str] | None = None,
 ) -> list[dict]:
-    """
-    For every archived poll that has a daily forecast entry FOR target_date,
-    return that single entry. Returns rows sorted by fetched_at ASC.
-    """
     with get_db() as conn:
         if providers:
             ph = ','.join('?' * len(providers))

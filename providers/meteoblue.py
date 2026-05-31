@@ -7,6 +7,7 @@ from urllib.parse import quote
 import requests
 from bs4 import BeautifulSoup
 
+import db
 from .base import ForecastEntry, LocationResult, WeatherProvider
 
 logger = logging.getLogger(__name__)
@@ -158,7 +159,7 @@ def _fetch_precip_probs(location_id: str, num_days: int) -> dict[int, int]:
                     probs[day_num - 1] = max_prob
         except Exception as e:
             logger.warning('Meteoblue precip prob fetch failed for day %d: %s', day_num, e)
-        time.sleep(0.25)
+        time.sleep(db.get_provider_delay('meteoblue'))
     return probs
 
 
