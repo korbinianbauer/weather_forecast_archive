@@ -100,6 +100,10 @@
     'humidity_humidity':                'Humidity %',
   };
 
+  const providerLabels = {{ provider_labels | tojson }};
+  const defaultProvider = {{ default_provider | tojson }};
+  const defaultLabel = defaultProvider ? (providerLabels[defaultProvider] || defaultProvider) : null;
+
   const targetDate = {{ target_date | tojson }};  // "YYYY-MM-DD"
   const xRangeEnd = targetDate + 'T23:59:59';
   const allXs = tracesAll.flatMap(t => Array.isArray(t.x) ? t.x : []).filter(Boolean);
@@ -119,6 +123,14 @@
   }
   tracesAll.forEach(t => { t.showlegend = false; });
 
+  // Hide non-default providers before initial render
+  if (defaultLabel) {
+    tracesAll.forEach(t => {
+      const group = t.legendgroup || t.name;
+      if (group && group !== defaultLabel) t.visible = false;
+    });
+  }
+
   const container = document.getElementById('charts-container');
 
   // Build legend with checkboxes; store refs for later handler attachment
@@ -132,7 +144,7 @@
       item.className = 'plot-legend-item';
       const cb = document.createElement('input');
       cb.type = 'checkbox';
-      cb.checked = true;
+      cb.checked = !defaultLabel || e.name === defaultLabel;
       item.appendChild(cb);
       item.insertAdjacentHTML('beforeend',
         `<span class="plot-legend-swatch" style="background:${e.color}"></span>${e.name}`);
@@ -173,7 +185,8 @@
 
     traceMap[divId] = {};
     traces.forEach((t, i) => {
-      if (t.name) (traceMap[divId][t.name] ||= []).push(i);
+      const key = t.legendgroup || t.name;
+      if (key) (traceMap[divId][key] ||= []).push(i);
     });
 
     const yr = yRangeFromTraces(traces);

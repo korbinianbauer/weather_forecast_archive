@@ -291,9 +291,10 @@ def location_plot(location_id):
     all_provider_names = [s['provider'] for s in sources]
 
     target_date = request.args.get('date', available_dates[0] if available_dates else '')
-    selected_providers = request.args.getlist('providers') or all_provider_names
+    url_providers = request.args.getlist('providers')
+    default_provider = url_providers[0] if len(url_providers) == 1 else None
 
-    rows = db.get_forecast_evolution(location_id, target_date, selected_providers) if target_date else []
+    rows = db.get_forecast_evolution(location_id, target_date, all_provider_names) if target_date else []
     traces_json = json.dumps(_build_evolution_traces(rows, provider_labels))
 
     return render_template(
@@ -302,8 +303,8 @@ def location_plot(location_id):
         available_dates=available_dates,
         target_date=target_date,
         all_providers=all_provider_names,
-        selected_providers=selected_providers,
         provider_labels=provider_labels,
+        default_provider=default_provider,
         traces_json=traces_json,
     )
 
