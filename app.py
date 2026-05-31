@@ -587,9 +587,12 @@ def settings_page():
     db_next_url    = _db_url(db_page=db_page + 1) if db_filtered_total and (db_page + 1) * _DB_PAGE_SIZE < db_filtered_total else None
     db_clear_url   = _db_url(db_page=0) if db_filters else None
 
+    server_tz = datetime.now().astimezone().tzname()
+
     return render_template(
         'settings.html',
         tab=tab,
+        server_tz=server_tz,
         all_settings=all_settings,
         all_locations=all_locations,
         all_providers=all_providers_list,
