@@ -47,6 +47,11 @@
     .btn-outline { background: transparent; color: var(--primary); border: 1px solid var(--primary); }
     .btn-danger  { background: var(--danger); color: #fff; }
     .btn-sm { padding: .3rem .7rem; font-size: .8rem; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { display: inline-block; width: .85em; height: .85em;
+               border: 2px solid currentColor; border-top-color: transparent;
+               border-radius: 50%; animation: spin .7s linear infinite;
+               vertical-align: middle; }
 
     /* forecast strip */
     .forecast-strip { display: flex; gap: .75rem; overflow-x: auto;
@@ -120,7 +125,9 @@
 <nav>
   <a href="/">&#9925; Weather Archive</a>
   <span class="nav-subtitle" style="flex:1;">Wetter.com &amp; Meteoblue · forecast history</span>
-  <a href="/db" style="color:rgba(255,255,255,.75); font-size:.82rem; font-weight:500; text-decoration:none;">🗄 DB</a>
+  {% if session.logged_in %}
+  <a href="{{ url_for('settings_page') }}" style="color:rgba(255,255,255,.75); font-size:.82rem; font-weight:500; text-decoration:none;">⚙ Settings</a>
+  {% endif %}
   {% if session.logged_in %}
   <form method="post" action="{{ url_for('logout') }}" style="margin:0;">
     <input type="hidden" name="_csrf" value="{{ csrf_token() }}">

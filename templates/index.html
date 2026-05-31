@@ -70,10 +70,7 @@
         <button class="btn btn-outline btn-sm" id="plotbtn-{{ loc.id }}"
                 onclick="togglePlot({{ loc.id }})">📈 Plot</button>
         {% if session.logged_in %}
-        <form method="post" action="{{ url_for('refresh_location', location_id=loc.id) }}" style="display:contents;">
-          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-          <button class="btn btn-outline btn-sm">↻</button>
-        </form>
+        <button class="btn btn-outline btn-sm" onclick="refreshLocation(this, {{ loc.id }}, '{{ csrf_token() }}')">↻</button>
         <form method="post" action="{{ url_for('delete_location', location_id=loc.id) }}"
               onsubmit="return confirm('Remove {{ loc.name }}?')" style="display:contents;">
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
@@ -216,6 +213,10 @@
 
 {% block scripts %}
 <script>
+if (new URLSearchParams(location.search).get('add') === '1') {
+  document.addEventListener('DOMContentLoaded', openModal);
+}
+
 {% if session.logged_in %}
 // ── modal ──────────────────────────────────────────────────────────────────
 const providerSelections = {};
@@ -312,11 +313,17 @@ function injectFormFields() {
 {% endif %}
 
 // ── plot toggle ────────────────────────────────────────────────────────────
-const PROVIDER_COLORS = {
-  wetter_com: { r:59,  g:130, b:246 },
-  meteoblue:  { r:34,  g:197, b:94  },
-};
-const DEFAULT_COLOR =   { r:168, g:85,  b:247 };
+(function () {
+  const _hex = {{ provider_colors | tojson }};
+  function hexRgb(h) {
+    h = h.replace('#', '');
+    return { r: parseInt(h.slice(0,2),16), g: parseInt(h.slice(2,4),16), b: parseInt(h.slice(4,6),16) };
+  }
+  window.PROVIDER_COLORS = Object.fromEntries(Object.entries(_hex).map(([k,v]) => [k, hexRgb(v)]));
+  window.DEFAULT_COLOR   = hexRgb('#a855f7');
+})();
+const PROVIDER_COLORS = window.PROVIDER_COLORS;
+const DEFAULT_COLOR   = window.DEFAULT_COLOR;
 const plotRendered = {};
 
 function rgba(provider, a) {
@@ -478,6 +485,29 @@ function buildTempTraces(rows, dates) {
     }
   }
   return traces;
+}
+
+async function refreshLocation(btn, locId, csrf) {
+  btn.disabled = true;
+  const orig = btn.innerHTML;
+  btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    await fetch(`/location/${locId}/refresh`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: `_csrf=${encodeURIComponent(csrf)}`,
+    });
+    while (true) {
+      await new Promise(r => setTimeout(r, 1500));
+      const res = await fetch(`/location/${locId}/refresh/status`);
+      const data = await res.json();
+      if (!data.running) break;
+    }
+    location.reload();
+  } catch (e) {
+    btn.innerHTML = orig;
+    btn.disabled = false;
+  }
 }
 </script>
 

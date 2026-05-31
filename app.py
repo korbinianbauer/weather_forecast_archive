@@ -1,14 +1,17 @@
+import collections
 import hmac
 import json
 import logging
 import os
 import secrets
+import threading
 import time
 from collections import defaultdict
 from datetime import datetime
 from functools import wraps
 
-from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from flask import (Flask, abort, jsonify, redirect, render_template,
+                   request, session, url_for)
 
 import db
 import providers
@@ -30,6 +33,33 @@ if not _ADMIN_PASSWORD:
 db.init_db()
 
 
+# ── in-memory log buffer ──────────────────────────────────────────────────────
+
+_log_lines: collections.deque = collections.deque(maxlen=500)
+_log_counter = 0
+_log_lock = threading.Lock()
+
+
+class _MemHandler(logging.Handler):
+    def emit(self, record):
+        global _log_counter
+        with _log_lock:
+            _log_counter += 1
+            n = _log_counter
+        _log_lines.append({
+            'n': n,
+            'level': record.levelname,
+            'msg': self.format(record),
+        })
+
+
+_mem_handler = _MemHandler()
+_mem_handler.setFormatter(
+    logging.Formatter('%(asctime)s %(levelname)-8s %(name)s — %(message)s')
+)
+logging.getLogger().addHandler(_mem_handler)
+
+
 # ── CSRF ──────────────────────────────────────────────────────────────────────
 
 def _csrf_token() -> str:
@@ -43,7 +73,8 @@ app.jinja_env.globals['csrf_token'] = _csrf_token
 def csrf_protect(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        token = request.form.get('_csrf', '')
+        token = (request.form.get('_csrf') or
+                 request.headers.get('X-CSRF-Token') or '')
         expected = session.get('_csrf', '')
         if not expected or not hmac.compare_digest(token, expected):
             abort(403)
@@ -54,8 +85,8 @@ def csrf_protect(f):
 # ── rate limiting ─────────────────────────────────────────────────────────────
 
 _login_attempts: dict[str, list[float]] = defaultdict(list)
-_RATE_LIMIT_WINDOW = 300  # seconds
-_RATE_LIMIT_MAX    = 10   # failed attempts per window
+_RATE_LIMIT_WINDOW = 300
+_RATE_LIMIT_MAX    = 10
 
 
 def _is_rate_limited(ip: str) -> bool:
@@ -110,7 +141,6 @@ def logout():
     return redirect(url_for('index'))
 
 
-
 # ── template helpers ──────────────────────────────────────────────────────────
 
 @app.template_filter('dt')
@@ -125,8 +155,38 @@ def fmt_dt(iso):
 
 @app.template_filter('opt')
 def fmt_opt(value, suffix=''):
-    """Render a nullable value; returns '—' if None."""
     return f'{value}{suffix}' if value is not None else '—'
+
+
+@app.context_processor
+def inject_provider_colors():
+    try:
+        colors = json.loads(db.get_setting('provider_colors', '{}'))
+    except json.JSONDecodeError:
+        colors = {}
+    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e'}
+    return {'provider_colors': {**defaults, **colors}}
+
+
+# ── provider color helpers ────────────────────────────────────────────────────
+
+_DEFAULT_COLOR_HEX = '#a855f7'
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    h = hex_color.lstrip('#')
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _provider_rgba(provider: str, alpha: float) -> str:
+    try:
+        colors = json.loads(db.get_setting('provider_colors', '{}'))
+    except json.JSONDecodeError:
+        colors = {}
+    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e'}
+    hex_color = {**defaults, **colors}.get(provider, _DEFAULT_COLOR_HEX)
+    r, g, b = _hex_to_rgb(hex_color)
+    return f'rgba({r},{g},{b},{alpha:.2f})'
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
@@ -248,32 +308,10 @@ def location_plot(location_id):
     )
 
 
-# Provider base colors for plot traces
-_PROVIDER_COLORS = {
-    'wetter_com':  (59,  130, 246),   # blue
-    'meteoblue':   (34,  197, 94),    # green
-}
-_DEFAULT_COLOR = (168, 85,  247)      # purple
-
-
-def _provider_rgba(provider: str, alpha: float) -> str:
-    r, g, b = _PROVIDER_COLORS.get(provider, _DEFAULT_COLOR)
-    return f'rgba({r},{g},{b},{alpha:.2f})'
-
-
 def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dict]:
-    """
-    Build Plotly traces showing how forecasts for a specific target date/time
-    evolved over successive polls.
-
-    X-axis: fetched_at (when the poll was taken)
-    Y-axis: the forecasted metric value for the target date/time
-    One line per (provider, granularity) combination.
-    """
     if not rows:
         return []
 
-    from collections import defaultdict
     groups: dict[tuple, list] = defaultdict(list)
     for row in rows:
         groups[(row['provider'], row['granularity'])].append(row)
@@ -299,8 +337,8 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
         label      = provider_labels.get(provider, provider)
         xs = [e['fetched_at'] for e in entries]
 
-        ymx = [e.get('temp_max')   for e in entries]
-        ymn = [e.get('temp_min')   for e in entries]
+        ymx = [e.get('temp_max')    for e in entries]
+        ymn = [e.get('temp_min')    for e in entries]
         yt  = [e.get('temperature') for e in entries]
         has_max = any(v is not None for v in ymx)
         has_min = any(v is not None for v in ymn)
@@ -336,9 +374,6 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
                 'metric': 'temperature', 'legendgroup': label,
             })
         elif has_max or has_min:
-            # Daily data: only max/min available — emit visible lines+markers for both.
-            # The invisible fill-band above only renders with 2+ points; these markers
-            # ensure something is always visible even with a single poll.
             show = label not in legend_shown
             if show:
                 legend_shown.add(label)
@@ -359,7 +394,6 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
                 'metric': 'temperature', 'legendgroup': label,
             })
         else:
-            # No temperature data at all — emit an empty trace so the chart always renders.
             show = label not in legend_shown
             if show:
                 legend_shown.add(label)
@@ -419,16 +453,34 @@ def add_location_source_route(location_id):
     return redirect(url_for('location_plot', location_id=location_id))
 
 
+_active_refreshes: set[int] = set()
+
 @app.route('/location/<int:location_id>/refresh', methods=['POST'])
 @login_required
 @csrf_protect
 def refresh_location(location_id):
-    for source in db.get_location_sources(location_id):
-        try:
-            _poll_source(location_id, source)
-        except Exception as e:
-            logger.error('Refresh failed: %s', e)
-    return redirect(url_for('index'))
+    if location_id in _active_refreshes:
+        return jsonify({'status': 'running'}), 202
+    sources = db.get_location_sources(location_id)
+    _active_refreshes.add(location_id)
+
+    def _run():
+        for source in sources:
+            try:
+                _poll_source(location_id, source)
+            except Exception as e:
+                logger.error('Refresh failed: %s', e)
+        _active_refreshes.discard(location_id)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'status': 'started'}), 202
+
+
+@app.route('/location/<int:location_id>/refresh/status')
+@login_required
+def refresh_status(location_id):
+    running = location_id in _active_refreshes
+    return jsonify({'running': running})
 
 
 @app.route('/location/<int:location_id>/delete', methods=['POST'])
@@ -436,14 +488,159 @@ def refresh_location(location_id):
 @csrf_protect
 def delete_location(location_id):
     db.delete_location(location_id)
-    return redirect(url_for('index'))
+    next_url = request.form.get('next', url_for('index'))
+    if not next_url.startswith('/') or next_url.startswith('//'):
+        next_url = url_for('index')
+    return redirect(next_url)
 
 
-# ── db browser ───────────────────────────────────────────────────────────────
+@app.route('/location/<int:location_id>/toggle_hidden', methods=['POST'])
+@login_required
+@csrf_protect
+def toggle_location_hidden(location_id):
+    db.toggle_location_hidden(location_id)
+    return redirect(url_for('settings_page', tab='locations'))
 
-_DB_TABLES = ('locations', 'location_sources', 'forecast_snapshots')
+
+@app.route('/settings/locations/reorder', methods=['POST'])
+@login_required
+@csrf_protect
+def reorder_locations():
+    data = request.get_json(silent=True) or {}
+    order = data.get('order', [])
+    for i, loc_id in enumerate(order):
+        db.update_location_sort_order(int(loc_id), i)
+    return jsonify({'ok': True})
+
+
+# ── settings ──────────────────────────────────────────────────────────────────
+
+_DB_TABLES  = ('locations', 'location_sources', 'forecast_snapshots')
 _DB_PAGE_SIZE = 200
 
+
+@app.route('/settings')
+@login_required
+def settings_page():
+    tab = request.args.get('tab', 'schedule')
+
+    all_settings  = db.get_all_settings()
+    all_locations = db.get_locations(show_hidden=True)
+    all_providers_list = providers.all_providers()
+    provider_labels    = {p.name: p.display_name for p in all_providers_list}
+
+    try:
+        stored_colors = json.loads(all_settings.get('provider_colors', '{}'))
+    except json.JSONDecodeError:
+        stored_colors = {}
+    try:
+        stored_delays = json.loads(all_settings.get('provider_delays', '{}'))
+    except json.JSONDecodeError:
+        stored_delays = {}
+
+    db_tables_summary = []
+    with db.get_db() as conn:
+        for t in _DB_TABLES:
+            count = conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]
+            cols  = [r[1] for r in conn.execute(f'PRAGMA table_info({t})')]
+            db_tables_summary.append({'name': t, 'count': count, 'cols': cols})
+
+    db_active_table = request.args.get('db_table') if tab == 'database' else None
+    db_rows = db_cols = db_total = db_filtered_total = None
+    db_page    = max(0, int(request.args.get('db_page', 0)))
+    db_filters = {k[2:]: v for k, v in request.args.items()
+                  if k.startswith('f_') and v.strip()}
+
+    if db_active_table and db_active_table in _DB_TABLES:
+        with db.get_db() as conn:
+            db_cols  = [r[1] for r in conn.execute(f'PRAGMA table_info({db_active_table})')]
+            db_total = conn.execute(f'SELECT COUNT(*) FROM {db_active_table}').fetchone()[0]
+
+            where_parts, params = [], []
+            for col, val in db_filters.items():
+                if col in db_cols:
+                    where_parts.append(f'{col} LIKE ?')
+                    params.append(f'%{val}%')
+            where = ('WHERE ' + ' AND '.join(where_parts)) if where_parts else ''
+
+            db_filtered_total = conn.execute(
+                f'SELECT COUNT(*) FROM {db_active_table} {where}', params
+            ).fetchone()[0]
+            db_rows = [list(r) for r in conn.execute(
+                f'SELECT * FROM {db_active_table} {where} LIMIT ? OFFSET ?',
+                params + [_DB_PAGE_SIZE, db_page * _DB_PAGE_SIZE],
+            ).fetchall()]
+
+    # Pre-build DB pagination/table URLs so the template doesn't need **-unpacking
+    def _db_url(**extra):
+        base = {'tab': 'database'}
+        if db_active_table:
+            base['db_table'] = db_active_table
+        for k, v in db_filters.items():
+            base['f_' + k] = v
+        base.update(extra)
+        return url_for('settings_page', **base)
+
+    db_table_urls  = {t['name']: _db_url(db_table=t['name'], db_page=0) for t in db_tables_summary}
+    db_prev_url    = _db_url(db_page=db_page - 1) if db_page > 0 else None
+    db_next_url    = _db_url(db_page=db_page + 1) if db_filtered_total and (db_page + 1) * _DB_PAGE_SIZE < db_filtered_total else None
+    db_clear_url   = _db_url(db_page=0) if db_filters else None
+
+    return render_template(
+        'settings.html',
+        tab=tab,
+        all_settings=all_settings,
+        all_locations=all_locations,
+        all_providers=all_providers_list,
+        provider_labels=provider_labels,
+        stored_colors=stored_colors,
+        stored_delays=stored_delays,
+        db_tables=db_tables_summary,
+        db_active_table=db_active_table,
+        db_rows=db_rows,
+        db_cols=db_cols,
+        db_total=db_total,
+        db_filtered_total=db_filtered_total,
+        db_filters=db_filters,
+        db_page=db_page,
+        db_page_size=_DB_PAGE_SIZE,
+        db_table_urls=db_table_urls,
+        db_prev_url=db_prev_url,
+        db_next_url=db_next_url,
+        db_clear_url=db_clear_url,
+    )
+
+
+@app.route('/settings/schedule', methods=['POST'])
+@login_required
+@csrf_protect
+def settings_save_schedule():
+    cron = request.form.get('poll_cron', '').strip()
+    if cron and len(cron.split()) == 5:
+        db.set_setting('poll_cron', cron)
+    return redirect(url_for('settings_page', tab='schedule'))
+
+
+@app.route('/settings/providers', methods=['POST'])
+@login_required
+@csrf_protect
+def settings_save_providers():
+    colors = {}
+    delays = {}
+    for p in providers.all_providers():
+        color = request.form.get(f'color_{p.name}', '').strip()
+        if color and len(color) == 7 and color.startswith('#'):
+            colors[p.name] = color
+        try:
+            delays[p.name] = max(0.0, min(30.0, float(request.form.get(f'delay_{p.name}', '') or 0.25)))
+        except ValueError:
+            delays[p.name] = 0.25
+    db.set_setting('provider_colors', json.dumps(colors))
+    db.set_setting('provider_delays', json.dumps(delays))
+    return redirect(url_for('settings_page', tab='providers'))
+
+
+# ── db browser (legacy standalone routes kept for compatibility) ──────────────
 
 @app.route('/db')
 def db_overview():
@@ -451,7 +648,7 @@ def db_overview():
     with db.get_db() as conn:
         for t in _DB_TABLES:
             count = conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]
-            cols = [r[1] for r in conn.execute(f'PRAGMA table_info({t})')]
+            cols  = [r[1] for r in conn.execute(f'PRAGMA table_info({t})')]
             tables.append({'name': t, 'count': count, 'cols': cols})
     return render_template('db_browser.html', tables=tables, active_table=None)
 
@@ -461,15 +658,13 @@ def db_table(table):
     if table not in _DB_TABLES:
         return redirect(url_for('db_overview'))
 
-    page = max(0, int(request.args.get('page', 0)))
-    filters = {k: v for k, v in request.args.items()
-               if k not in ('page',) and v.strip()}
+    page    = max(0, int(request.args.get('page', 0)))
+    filters = {k: v for k, v in request.args.items() if k not in ('page',) and v.strip()}
 
     with db.get_db() as conn:
-        cols = [r[1] for r in conn.execute(f'PRAGMA table_info({table})')]
+        cols  = [r[1] for r in conn.execute(f'PRAGMA table_info({table})')]
         total = conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
 
-        # Build WHERE clause from column filters
         where_parts, params = [], []
         for col, val in filters.items():
             if col in cols:
@@ -480,12 +675,10 @@ def db_table(table):
         filtered_total = conn.execute(
             f'SELECT COUNT(*) FROM {table} {where}', params
         ).fetchone()[0]
-
-        rows = conn.execute(
+        rows = [list(r) for r in conn.execute(
             f'SELECT * FROM {table} {where} LIMIT ? OFFSET ?',
             params + [_DB_PAGE_SIZE, page * _DB_PAGE_SIZE],
-        ).fetchall()
-        rows = [list(r) for r in rows]
+        ).fetchall()]
 
     tables_summary = []
     with db.get_db() as conn:
@@ -505,6 +698,16 @@ def db_table(table):
         page_size=_DB_PAGE_SIZE,
         filters=filters,
     )
+
+
+# ── log API ───────────────────────────────────────────────────────────────────
+
+@app.route('/api/logs')
+@login_required
+def api_logs():
+    since = int(request.args.get('since', 0))
+    lines = [l for l in list(_log_lines) if l['n'] > since]
+    return jsonify({'lines': lines, 'count': _log_counter})
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
