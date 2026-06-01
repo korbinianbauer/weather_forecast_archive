@@ -251,6 +251,7 @@ def index():
         date_start=date_start,
         date_end=date_end,
         date_end_display=_fmt_date(date_end),
+        polling_location_ids=list(_active_refreshes),
     ))
     r.headers['Cache-Control'] = 'no-store'
     return r
@@ -300,13 +301,18 @@ def add_location():
             metadata = {}
         db.add_location_source(location_id, pname, plid, metadata)
 
-    for source in db.get_location_sources(location_id):
-        try:
-            _poll_source(location_id, source)
-        except Exception as e:
-            logger.error('Initial poll failed for %s: %s', source['provider'], e)
+    _active_refreshes.add(location_id)
 
-    return redirect(url_for('location_plot', location_id=location_id))
+    def _initial_poll():
+        for source in db.get_location_sources(location_id):
+            try:
+                _poll_source(location_id, source)
+            except Exception as e:
+                logger.error('Initial poll failed for %s: %s', source['provider'], e)
+        _active_refreshes.discard(location_id)
+
+    threading.Thread(target=_initial_poll, daemon=True).start()
+    return redirect(url_for('index'))
 
 
 @app.route('/location/<int:location_id>/plot')
@@ -499,12 +505,15 @@ def add_location_source_route(location_id):
         db.add_location_source(location_id, pname, plid, metadata)
         source = next((s for s in db.get_location_sources(location_id) if s['provider'] == pname), None)
         if source:
-            try:
-                _poll_source(location_id, source)
-            except Exception as e:
-                logger.error('Poll failed after adding source %s: %s', pname, e)
+            _active_refreshes.add(location_id)
+            def _bg(loc_id=location_id, src=source):
+                try:
+                    _poll_source(loc_id, src)
+                finally:
+                    _active_refreshes.discard(loc_id)
+            threading.Thread(target=_bg, daemon=True).start()
 
-    return redirect(url_for('index'))
+    return redirect(url_for('settings_page', tab='locations'))
 
 
 @app.route('/location/<int:location_id>/source/<provider>/toggle_enabled', methods=['POST'])
