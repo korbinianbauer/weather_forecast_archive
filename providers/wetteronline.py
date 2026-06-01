@@ -89,21 +89,29 @@ class WetterOnlineProvider(WeatherProvider):
             return []
 
 
+def _icon_base(html: str) -> str:
+    m = re.search(r'st\.wetteronline\.de/dr/(\d+\.\d+\.\d+)/', html)
+    if m:
+        return f'https://st.wetteronline.de/dr/{m.group(1)}/city/prozess/graphiken/symbole/standard/farbe/png/40x28'
+    return ''
+
+
 # ── HTML / JSON parsing ───────────────────────────────────────────────────────
 
 def _parse_forecast(html: str) -> list[ForecastEntry]:
+    base = _icon_base(html)
     for script in re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL):
         if 'metadata_p_city_local_LongTerm' not in script:
             continue
         try:
-            return _extract_longterm(script)
+            return _extract_longterm(script, base)
         except Exception as e:
             logger.warning('WetterOnline JSON extraction failed: %s', e)
     logger.warning('WetterOnline: metadata_p_city_local_LongTerm not found in page')
     return []
 
 
-def _extract_longterm(script: str) -> list[ForecastEntry]:
+def _extract_longterm(script: str, icon_base: str) -> list[ForecastEntry]:
     key = '"metadata_p_city_local_LongTerm"'
     idx = script.find(key)
     if idx == -1:
@@ -116,7 +124,7 @@ def _extract_longterm(script: str) -> list[ForecastEntry]:
     result = []
     for day_data in days:
         try:
-            entry = _parse_day(day_data, today)
+            entry = _parse_day(day_data, today, icon_base)
             if entry and entry.forecast_time:
                 result.append(entry)
         except Exception as e:
@@ -124,7 +132,7 @@ def _extract_longterm(script: str) -> list[ForecastEntry]:
     return result
 
 
-def _parse_day(d: dict, ref: date) -> Optional[ForecastEntry]:
+def _parse_day(d: dict, ref: date, icon_base: str = '') -> Optional[ForecastEntry]:
     # date is "DD.MM." without year
     m = re.match(r'(\d{1,2})\.(\d{2})\.', d.get('date', ''))
     if not m:
@@ -144,7 +152,7 @@ def _parse_day(d: dict, ref: date) -> Optional[ForecastEntry]:
             pass
 
     symbol = d.get('symbol', '')
-    icon_url = f'https://st.wetteronline.de/icons/wetter-icons/s/{symbol}.png' if symbol else None
+    icon_url = f'{icon_base}/{symbol}.png' if (symbol and icon_base) else None
 
     return ForecastEntry(
         forecast_time=f'{forecast_date}T00:00:00',
