@@ -1,10 +1,12 @@
 from .base import ForecastEntry, LocationResult, WeatherProvider
 from .meteoblue import MeteoblueProvider
 from .wetter_com import WetterComProvider
+from .wetteronline import WetterOnlineProvider
 
 _all: list[WeatherProvider] = [
     WetterComProvider(),
     MeteoblueProvider(),
+    WetterOnlineProvider(),
 ]
 
 REGISTRY: dict[str, WeatherProvider] = {p.name: p for p in _all}
