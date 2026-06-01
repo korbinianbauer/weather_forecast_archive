@@ -890,7 +890,7 @@ function buildSimpleTraces(rows, dates, field) {
     const ys = dates.map(d => row.byDate[d]?.[field] ?? null);
     if (ys.every(v => v === null)) continue;
     traces.push({
-      x: dates, y: ys,
+      x: dates.map(d => d + 'T12:00:00'), y: ys,
       type: 'scatter', mode: 'lines+markers',
       name: row.label, showlegend: false, _provider: row.provider,
       line: { color: rgba(row.provider, 1), width: 2 },
@@ -903,6 +903,7 @@ function buildSimpleTraces(rows, dates, field) {
 
 function buildTempTraces(rows, dates) {
   const traces = [];
+  const xs = dates.map(d => d + 'T12:00:00');
   for (const row of rows) {
     const ymx = dates.map(d => row.byDate[d]?.temp_max ?? null);
     const ymn = dates.map(d => row.byDate[d]?.temp_min ?? null);
@@ -916,12 +917,12 @@ function buildTempTraces(rows, dates) {
 
     if (hasMx && hasMn) {
       traces.push({
-        x: dates, y: ymx, type: 'scatter', mode: 'lines',
+        x: xs, y: ymx, type: 'scatter', mode: 'lines',
         line: { width: 0 }, showlegend: false, hoverinfo: 'skip',
         name: row.label, _provider: row.provider,
       });
       traces.push({
-        x: dates, y: ymn, type: 'scatter', mode: 'lines',
+        x: xs, y: ymn, type: 'scatter', mode: 'lines',
         fill: 'tonexty', fillcolor: fill,
         line: { width: 0 }, showlegend: false, hoverinfo: 'skip',
         name: row.label, _provider: row.provider,
@@ -930,7 +931,7 @@ function buildTempTraces(rows, dates) {
 
     if (hasT) {
       traces.push({
-        x: dates, y: yt, type: 'scatter', mode: 'lines+markers',
+        x: xs, y: yt, type: 'scatter', mode: 'lines+markers',
         name: row.label, showlegend: false, _provider: row.provider,
         line: { color: line, width: 2 },
         marker: { size: 5, color: line },
@@ -938,14 +939,14 @@ function buildTempTraces(rows, dates) {
       });
     } else if (hasMx || hasMn) {
       traces.push({
-        x: dates, y: ymx, type: 'scatter', mode: 'lines+markers',
+        x: xs, y: ymx, type: 'scatter', mode: 'lines+markers',
         name: row.label, showlegend: false, _provider: row.provider,
         line: { color: line, width: 2 },
         marker: { size: 5, color: line, symbol: 'triangle-up' },
         connectgaps: false,
       });
       traces.push({
-        x: dates, y: ymn, type: 'scatter', mode: 'lines+markers',
+        x: xs, y: ymn, type: 'scatter', mode: 'lines+markers',
         name: row.label, showlegend: false, _provider: row.provider,
         line: { color: line, width: 2 },
         marker: { size: 5, color: line, symbol: 'triangle-down' },
@@ -953,7 +954,7 @@ function buildTempTraces(rows, dates) {
       });
     } else {
       traces.push({
-        x: dates, y: dates.map(() => null), type: 'scatter', mode: 'lines+markers',
+        x: xs, y: xs.map(() => null), type: 'scatter', mode: 'lines+markers',
         name: row.label, showlegend: false, _provider: row.provider,
         line: { color: line, width: 2 },
         marker: { size: 5, color: line },
