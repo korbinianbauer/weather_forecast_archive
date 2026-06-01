@@ -206,20 +206,25 @@ def index():
         rows = []
         all_dates: set[str] = set()
 
+        configured_providers = {s['provider'] for s in sources}
         for source in sources:
             entries = db.get_latest_forecast(loc['id'], provider=source['provider'], granularity='daily')
             by_date = {e['forecast_time'][:10]: e for e in entries}
             all_dates.update(by_date.keys())
             rows.append({
                 'provider': source['provider'],
+                'enabled': source.get('enabled', 1),
                 'fetched_at': entries[0]['fetched_at'] if entries else None,
                 'by_date': by_date,
             })
 
+        available_providers = [p for p in providers.all_providers()
+                               if p.name not in configured_providers]
         location_data.append({
             'location': loc,
             'all_dates': sorted(all_dates),
             'rows': rows,
+            'available_providers': available_providers,
         })
 
     default_start = _date.today().isoformat()
@@ -499,7 +504,19 @@ def add_location_source_route(location_id):
             except Exception as e:
                 logger.error('Poll failed after adding source %s: %s', pname, e)
 
-    return redirect(url_for('location_plot', location_id=location_id))
+    return redirect(url_for('index'))
+
+
+@app.route('/location/<int:location_id>/source/<provider>/toggle_enabled', methods=['POST'])
+@login_required
+@csrf_protect
+def toggle_source_enabled(location_id, provider):
+    sources = db.get_location_sources(location_id)
+    source = next((s for s in sources if s['provider'] == provider), None)
+    if source:
+        db.set_source_enabled(location_id, provider, not source.get('enabled', 1))
+    return redirect(url_for('index'))
+
 
 
 _active_refreshes: set[int] = set()
@@ -515,6 +532,8 @@ def refresh_location(location_id):
 
     def _run():
         for source in sources:
+            if not source.get('enabled', 1):
+                continue
             try:
                 _poll_source(location_id, source)
             except Exception as e:
@@ -577,6 +596,14 @@ def settings_page():
     all_locations = db.get_locations(show_hidden=True)
     all_providers_list = providers.all_providers()
     provider_labels    = {p.name: p.display_name for p in all_providers_list}
+
+    location_sources: dict[int, list] = {}
+    available_providers_by_loc: dict[int, list] = {}
+    for loc in all_locations:
+        srcs = db.get_location_sources(loc['id'])
+        location_sources[loc['id']] = srcs
+        configured = {s['provider'] for s in srcs}
+        available_providers_by_loc[loc['id']] = [p for p in all_providers_list if p.name not in configured]
 
     try:
         stored_colors = json.loads(all_settings.get('provider_colors', '{}'))
@@ -643,6 +670,8 @@ def settings_page():
         server_tz=server_tz,
         all_settings=all_settings,
         all_locations=all_locations,
+        location_sources=location_sources,
+        available_providers_by_loc=available_providers_by_loc,
         all_providers=all_providers_list,
         provider_labels=provider_labels,
         stored_colors=stored_colors,

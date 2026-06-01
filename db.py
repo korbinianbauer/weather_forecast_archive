@@ -89,6 +89,9 @@ def init_db():
             'sort_order': 'INTEGER DEFAULT 0',
             'hidden':     'INTEGER DEFAULT 0',
         })
+        _add_columns_if_missing(conn, 'location_sources', {
+            'enabled': 'INTEGER DEFAULT 1',
+        })
         _init_default_settings(conn)
 
 
@@ -224,8 +227,19 @@ def get_location_sources(location_id: int) -> list[dict]:
         for r in rows:
             d = dict(r)
             d['metadata'] = json.loads(d['metadata'] or '{}')
+            d.setdefault('enabled', 1)
             result.append(d)
         return result
+
+
+def set_source_enabled(location_id: int, provider: str, enabled: bool):
+    with get_db() as conn:
+        conn.execute(
+            'UPDATE location_sources SET enabled = ? WHERE location_id = ? AND provider = ?',
+            (1 if enabled else 0, location_id, provider),
+        )
+
+
 
 
 def get_locations(show_hidden: bool = False) -> list[dict]:
