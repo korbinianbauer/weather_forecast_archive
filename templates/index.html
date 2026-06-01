@@ -108,6 +108,9 @@
             {% if row.fetched_at %}
             <span class="fetched">polled <time class="local-time" datetime="{{ row.fetched_at }}">{{ row.fetched_at|dt }}</time></span>
             {% endif %}
+            {% if not row.enabled %}
+            <span class="fetched">(disabled)</span>
+            {% endif %}
           </div>
           <div class="day-grid" style="grid-template-columns: repeat({{ n }}, minmax(0, 1fr));">
             {% for d in item.all_dates %}

@@ -103,6 +103,17 @@
   .loc-item-meta { font-size: .75rem; color: var(--muted); }
   .loc-item-actions { display: flex; gap: .4rem; flex-shrink: 0; }
   .loc-hidden .loc-item-name { color: var(--muted); text-decoration: line-through; }
+
+  .loc-item { flex-wrap: wrap; }
+  .loc-item-header { display: flex; align-items: center; gap: .75rem; width: 100%; }
+  .loc-providers { width: 100%; padding-top: .6rem; border-top: 1px solid var(--border); margin-top: .5rem; display: flex; flex-direction: column; gap: .35rem; }
+  .loc-src-row { display: flex; align-items: center; gap: .5rem; font-size: .82rem; }
+  .loc-src-name { flex: 1; color: var(--text); font-weight: 500; }
+  .loc-src-name.disabled { color: var(--muted); text-decoration: line-through; }
+  .loc-src-add { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .5rem; margin-top: .5rem; }
+  .loc-src-add select { padding: .3rem .5rem; border: 1px solid var(--border); border-radius: 6px;
+    font-size: .82rem; background: var(--surface); color: var(--text); }
+
   .toggle-btn {
     padding: .28rem .65rem; border-radius: 5px; border: 1px solid var(--border);
     background: var(--surface); cursor: pointer; font-size: .78rem;
@@ -309,6 +320,8 @@
     {% if all_locations %}
     <div class="loc-list" id="locList" style="max-width:620px;">
       {% for loc in all_locations %}
+      {% set srcs = location_sources.get(loc.id, []) %}
+      {% set avail = available_providers_by_loc.get(loc.id, []) %}
       <div class="loc-item {% if loc.hidden %}loc-hidden{% endif %}"
            data-id="{{ loc.id }}"
            draggable="true"
@@ -316,31 +329,84 @@
            ondragover="onDragOver(event)"
            ondrop="onDrop(event)"
            ondragend="onDragEnd(event)">
-        <span class="loc-drag" title="Drag to reorder">⠿</span>
-        <div style="flex:1; min-width:0;">
-          <div class="loc-item-name">{{ loc.name }}</div>
-          <div class="loc-item-meta">
-            {{ '%.4f'|format(loc.latitude or 0) }}°, {{ '%.4f'|format(loc.longitude or 0) }}°
-            &nbsp;·&nbsp; {{ loc.providers or '—' }}
-            {% if loc.hidden %}&nbsp;·&nbsp; <span style="color:var(--muted);">hidden</span>{% endif %}
+        <div class="loc-item-header">
+          <span class="loc-drag" title="Drag to reorder">⠿</span>
+          <div style="flex:1; min-width:0;">
+            <div class="loc-item-name">{{ loc.name }}</div>
+            <div class="loc-item-meta">
+              {{ '%.4f'|format(loc.latitude or 0) }}°, {{ '%.4f'|format(loc.longitude or 0) }}°
+              {% if loc.hidden %}&nbsp;·&nbsp; <span style="color:var(--muted);">hidden</span>{% endif %}
+            </div>
+          </div>
+          <div class="loc-item-actions">
+            <form method="post" action="{{ url_for('toggle_location_hidden', location_id=loc.id) }}"
+                  style="display:contents;">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <label style="display:flex; align-items:center; gap:.35rem; font-size:.82rem; cursor:pointer;">
+                <input type="checkbox" {% if not loc.hidden %}checked{% endif %}
+                       onchange="this.form.submit()" title="Visible on front page">
+                Visible
+              </label>
+            </form>
+            <form method="post" action="{{ url_for('delete_location', location_id=loc.id) }}"
+                  onsubmit="return confirm('Delete {{ loc.name }} and all its data?')"
+                  style="display:contents;">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="next" value="{{ url_for('settings_page', tab='locations') }}">
+              <button type="submit" class="btn btn-danger btn-sm">✕</button>
+            </form>
           </div>
         </div>
-        <div class="loc-item-actions">
-          <form method="post" action="{{ url_for('toggle_location_hidden', location_id=loc.id) }}"
-                style="display:contents;">
-            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-            <button type="submit" class="toggle-btn {% if not loc.hidden %}shown{% endif %}"
-                    title="{{ 'Hide from front page' if not loc.hidden else 'Show on front page' }}">
-              {{ 'Visible' if not loc.hidden else 'Hidden' }}
-            </button>
-          </form>
-          <form method="post" action="{{ url_for('delete_location', location_id=loc.id) }}"
-                onsubmit="return confirm('Delete {{ loc.name }} and all its data?')"
-                style="display:contents;">
-            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-            <input type="hidden" name="next" value="{{ url_for('settings_page', tab='locations') }}">
-            <button type="submit" class="btn btn-danger btn-sm">✕</button>
-          </form>
+
+        <div class="loc-providers">
+          {% for src in srcs %}
+          <div class="loc-src-row">
+            <span class="loc-src-name {% if not src.enabled %}disabled{% endif %}">
+              {{ provider_labels.get(src.provider, src.provider) }}
+            </span>
+            <form method="post" action="{{ url_for('toggle_source_enabled', location_id=loc.id, provider=src.provider) }}"
+                  style="display:contents;">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <label style="display:flex; align-items:center; gap:.35rem; font-size:.82rem; cursor:pointer;">
+                <input type="checkbox" {% if src.enabled %}checked{% endif %}
+                       onchange="this.form.submit()">
+                Enabled
+              </label>
+            </form>
+          </div>
+          {% endfor %}
+
+          {% if avail %}
+          <div class="loc-src-add">
+            <select id="src-sel-{{ loc.id }}" onchange="srcSelChange({{ loc.id }})">
+              <option value="">+ Add provider…</option>
+              {% for p in avail %}
+              <option value="{{ p.name }}">{{ p.display_name }}</option>
+              {% endfor %}
+            </select>
+            {% for p in avail %}
+            <div id="src-pane-{{ loc.id }}-{{ p.name }}" style="display:none; display:none; flex-wrap:wrap; gap:.4rem; align-items:flex-end;">
+              <input type="text" class="search-input" style="font-size:.82rem; padding:.3rem .55rem; width:220px;"
+                     id="src-q-{{ loc.id }}-{{ p.name }}"
+                     placeholder="Search city in {{ p.display_name }}…"
+                     autocomplete="off"
+                     oninput="srcSearch({{ loc.id }}, '{{ p.name }}', this.value)">
+              <div class="search-results" id="src-results-{{ loc.id }}-{{ p.name }}" style="font-size:.82rem;"></div>
+              <span id="src-chosen-label-{{ loc.id }}-{{ p.name }}" style="font-size:.82rem; color:var(--primary);"></span>
+              <form method="post" action="{{ url_for('add_location_source_route', location_id=loc.id) }}" style="display:contents;">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="provider" value="{{ p.name }}">
+                <input type="hidden" name="provider_location_id" id="src-plid-{{ loc.id }}-{{ p.name }}">
+                <input type="hidden" name="metadata" id="src-meta-{{ loc.id }}-{{ p.name }}" value="{}">
+                <button type="submit" class="btn btn-primary btn-sm"
+                        id="src-submit-{{ loc.id }}-{{ p.name }}" disabled>Add</button>
+              </form>
+              <button type="button" class="btn btn-outline btn-sm"
+                      onclick="srcClear({{ loc.id }}, '{{ p.name }}')">Cancel</button>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
         </div>
       </div>
       {% endfor %}
@@ -528,6 +594,62 @@ function saveOrder() {
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
     body: JSON.stringify({ order }),
   });
+}
+{% endif %}
+
+{% if tab == 'locations' %}
+// ── add provider search ───────────────────────────────────────────────────
+const _srcDebounce = {};
+
+function srcSelChange(locId) {
+  const sel = document.getElementById('src-sel-' + locId);
+  const chosen = sel.value;
+  document.querySelectorAll('[id^="src-pane-' + locId + '-"]').forEach(el => el.style.display = 'none');
+  if (chosen) {
+    const pane = document.getElementById('src-pane-' + locId + '-' + chosen);
+    if (pane) pane.style.display = 'flex';
+  }
+}
+
+function srcSearch(locId, provider, q) {
+  const resultsEl = document.getElementById('src-results-' + locId + '-' + provider);
+  clearTimeout(_srcDebounce[locId + provider]);
+  if (q.length < 2) { resultsEl.classList.remove('visible'); return; }
+  _srcDebounce[locId + provider] = setTimeout(() => {
+    fetch('/search?q=' + encodeURIComponent(q) + '&provider=' + encodeURIComponent(provider))
+      .then(r => r.json())
+      .then(data => {
+        if (!data.length) { resultsEl.classList.remove('visible'); return; }
+        resultsEl.replaceChildren(...data.map(item => {
+          const div = document.createElement('div');
+          div.className = 'search-result-item';
+          div.addEventListener('click', () => srcPickItem(locId, provider, item));
+          const name = document.createElement('div'); name.className = 'city-name'; name.textContent = item.name;
+          const meta = document.createElement('div'); meta.className = 'city-meta'; meta.textContent = item.extra.title || item.name;
+          div.append(name, meta);
+          return div;
+        }));
+        resultsEl.classList.add('visible');
+      });
+  }, 300);
+}
+
+function srcPickItem(locId, provider, item) {
+  document.getElementById('src-results-' + locId + '-' + provider).classList.remove('visible');
+  document.getElementById('src-q-' + locId + '-' + provider).value = '';
+  document.getElementById('src-chosen-label-' + locId + '-' + provider).textContent = item.extra.title || item.name;
+  document.getElementById('src-plid-' + locId + '-' + provider).value = item.provider_location_id;
+  document.getElementById('src-meta-' + locId + '-' + provider).value = JSON.stringify(item.extra || {});
+  document.getElementById('src-submit-' + locId + '-' + provider).disabled = false;
+}
+
+function srcClear(locId, provider) {
+  document.getElementById('src-pane-' + locId + '-' + provider).style.display = 'none';
+  document.getElementById('src-sel-' + locId).value = '';
+  document.getElementById('src-q-' + locId + '-' + provider).value = '';
+  document.getElementById('src-chosen-label-' + locId + '-' + provider).textContent = '';
+  document.getElementById('src-plid-' + locId + '-' + provider).value = '';
+  document.getElementById('src-submit-' + locId + '-' + provider).disabled = true;
 }
 {% endif %}
 

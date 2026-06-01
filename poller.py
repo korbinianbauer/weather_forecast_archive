@@ -35,6 +35,8 @@ def _poll_source(location_id: int, source: dict):
 def poll_all_due():
     for loc in db.get_locations():
         for source in db.get_location_sources(loc['id']):
+            if not source.get('enabled', 1):
+                continue
             if not db.already_polled_today(loc['id'], source['provider']):
                 try:
                     _poll_source(loc['id'], source)
