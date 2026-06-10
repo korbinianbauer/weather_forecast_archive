@@ -1,9 +1,10 @@
-import collections
 import hmac
 import json
 import logging
 import os
 import secrets
+import subprocess
+import sys
 import threading
 import time
 from collections import defaultdict
@@ -33,31 +34,51 @@ if not _ADMIN_PASSWORD:
 db.init_db()
 
 
-# ── in-memory log buffer ──────────────────────────────────────────────────────
+# ── file logging ──────────────────────────────────────────────────────────────
 
-_log_lines: collections.deque = collections.deque(maxlen=500)
-_log_counter = 0
-_log_lock = threading.Lock()
+_LOG_DIR = os.path.dirname(os.path.abspath(__file__))
+_LOG_FORMAT = logging.Formatter('%(asctime)s %(levelname)-8s %(name)s — %(message)s')
+
+_file_handler = logging.FileHandler(os.path.join(_LOG_DIR, 'app.log'))
+_file_handler.setFormatter(_LOG_FORMAT)
+logging.getLogger().addHandler(_file_handler)
+
+_LOG_FILES = {
+    'app':    os.path.join(_LOG_DIR, 'app.log'),
+    'poll':   os.path.join(_LOG_DIR, 'poll.log'),
+    'access': os.path.join(_LOG_DIR, 'access.log'),
+}
+
+# Route werkzeug access logs to access.log (dev server; gunicorn writes it directly)
+_access_handler = logging.FileHandler(os.path.join(_LOG_DIR, 'access.log'))
+_access_handler.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
+logging.getLogger('werkzeug').addHandler(_access_handler)
 
 
-class _MemHandler(logging.Handler):
-    def emit(self, record):
-        global _log_counter
-        with _log_lock:
-            _log_counter += 1
-            n = _log_counter
-        _log_lines.append({
-            'n': n,
-            'level': record.levelname,
-            'msg': self.format(record),
-        })
+# ── poll process management ───────────────────────────────────────────────────
+
+def _ensure_poll_running():
+    """Start poll.py if it is not already running."""
+    pidfile = os.path.join(_LOG_DIR, 'poll.pid')
+    try:
+        with open(pidfile) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)
+        return  # already running
+    except (OSError, ValueError):
+        pass
+    log_path = os.path.join(_LOG_DIR, 'poll.log')
+    with open(log_path, 'a') as log_fh:
+        subprocess.Popen(
+            [sys.executable, os.path.join(_LOG_DIR, 'poll.py')],
+            cwd=_LOG_DIR,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+        )
+    logger.info('Started poll.py process')
 
 
-_mem_handler = _MemHandler()
-_mem_handler.setFormatter(
-    logging.Formatter('%(asctime)s %(levelname)-8s %(name)s — %(message)s')
-)
-logging.getLogger().addHandler(_mem_handler)
+_ensure_poll_running()
 
 
 # ── CSRF ──────────────────────────────────────────────────────────────────────
@@ -816,9 +837,35 @@ def db_table(table):
 @app.route('/api/logs')
 @login_required
 def api_logs():
-    since = int(request.args.get('since', 0))
-    lines = [l for l in list(_log_lines) if l['n'] > since]
-    return jsonify({'lines': lines, 'count': _log_counter})
+    file_key = request.args.get('file', 'app')
+    if file_key not in _LOG_FILES:
+        return jsonify({'error': 'unknown file'}), 400
+
+    path = _LOG_FILES[file_key]
+    try:
+        with open(path, 'rb') as f:
+            f.seek(0, 2)
+            size = f.tell()
+
+            if 'offset' in request.args:
+                offset = max(0, int(request.args['offset']))
+                if offset >= size:
+                    return jsonify({'lines': [], 'offset': size})
+                f.seek(offset)
+                data = f.read()
+            else:
+                # tail last N lines
+                n = min(int(request.args.get('tail', 300)), 2000)
+                chunk = min(n * 120, size)
+                f.seek(max(0, size - chunk))
+                data = f.read()
+
+            lines = data.decode('utf-8', errors='replace').splitlines()
+            if 'offset' not in request.args:
+                lines = lines[-n:]
+            return jsonify({'lines': lines, 'offset': size})
+    except FileNotFoundError:
+        return jsonify({'lines': [], 'offset': 0, 'missing': True})
 
 
 # ── entry point ───────────────────────────────────────────────────────────────

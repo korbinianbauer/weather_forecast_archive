@@ -532,19 +532,46 @@
 
     {# ════════════════════════════════════════ LOGS ═══════════════════════════ #}
     {% elif tab == 'logs' %}
-    <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1rem;">
-      <h2 style="margin:0;">Server Logs</h2>
-      <label style="display:flex; align-items:center; gap:.4rem; font-size:.82rem; cursor:pointer;">
+    <style>
+      .log-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:.6rem; margin-bottom:.75rem; }
+      .log-file-tabs { display:flex; gap:.3rem; }
+      .log-file-tab {
+        padding:.28rem .7rem; border-radius:5px; border:1px solid var(--border);
+        background:var(--surface); cursor:pointer; font-size:.8rem; font-weight:500;
+        color:var(--muted); transition:background .1s, color .1s;
+      }
+      .log-file-tab:hover { background:var(--bg); color:var(--text); }
+      .log-file-tab.active { background:var(--primary); color:#fff; border-color:var(--primary); }
+      #log-search {
+        padding:.28rem .6rem; border:1px solid var(--border); border-radius:5px;
+        font-size:.8rem; background:var(--surface); color:var(--text); width:180px;
+      }
+      #log-output {
+        font-family: monospace; font-size:.75rem; line-height:1.5;
+        background:#1e1e1e; color:#d4d4d4;
+        border-radius:6px; padding:.75rem; height:520px;
+        overflow-y:scroll; white-space:pre-wrap; word-break:break-all;
+      }
+      .log-ERROR   { color:#f88; }
+      .log-WARNING { color:#fc8; }
+      .log-DEBUG   { color:#888; }
+      .log-INFO    { color:#d4d4d4; }
+      #log-status  { font-size:.73rem; color:var(--muted); margin-left:auto; }
+    </style>
+    <h2 style="margin:0 0 .85rem;">Logs</h2>
+    <div class="log-toolbar">
+      <div class="log-file-tabs">
+        <button class="log-file-tab active" data-file="app"    onclick="switchFile('app')">App</button>
+        <button class="log-file-tab"        data-file="poll"   onclick="switchFile('poll')">Poll</button>
+        <button class="log-file-tab"        data-file="access" onclick="switchFile('access')">Access</button>
+      </div>
+      <input id="log-search" type="search" placeholder="Filter…" oninput="applyFilter()">
+      <label style="display:flex; align-items:center; gap:.35rem; font-size:.8rem; cursor:pointer; white-space:nowrap;">
         <input type="checkbox" id="autoScroll" checked> Auto-scroll
       </label>
-      <button class="btn btn-outline btn-sm" onclick="clearLog()">Clear</button>
-      <span id="log-status" style="font-size:.75rem; color:var(--muted);"></span>
+      <span id="log-status"></span>
     </div>
-    <div id="log-output" role="log" aria-live="polite"></div>
-    <div style="font-size:.75rem; color:var(--muted); margin-top:.5rem;">
-      Showing logs from this web server process.
-      The poller process logs separately to its own stdout / log file.
-    </div>
+    <div id="log-output"></div>
     {% endif %}
 
   </div>{# /st-section #}
@@ -655,45 +682,98 @@ function srcClear(locId, provider) {
 
 {% if tab == 'logs' %}
 // ── log viewer ────────────────────────────────────────────────────────────
-let lastN = 0;
-const output = document.getElementById('log-output');
+const output     = document.getElementById('log-output');
 const autoScroll = document.getElementById('autoScroll');
+const searchEl   = document.getElementById('log-search');
 const statusEl   = document.getElementById('log-status');
 
-function clearLog() { output.innerHTML = ''; }
+let currentFile = 'app';
+let currentOffset = 0;
+let allLines = [];
+let pollTimer = null;
 
-function levelClass(lvl) {
-  if (lvl === 'WARNING')  return 'log-WARNING';
-  if (lvl === 'ERROR' || lvl === 'CRITICAL') return 'log-ERROR';
-  if (lvl === 'DEBUG') return 'log-DEBUG';
+function levelClass(line) {
+  if (/ ERROR   | CRITICAL /.test(line)) return 'log-ERROR';
+  if (/ WARNING /.test(line))            return 'log-WARNING';
+  if (/ DEBUG   /.test(line))            return 'log-DEBUG';
   return 'log-INFO';
 }
 
-async function fetchLogs() {
+function applyFilter() {
+  const q = searchEl.value.trim().toLowerCase();
+  const wasBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 40;
+  output.innerHTML = '';
+  const visible = q ? allLines.filter(l => l.toLowerCase().includes(q)) : allLines;
+  const frag = document.createDocumentFragment();
+  for (const l of visible) {
+    const span = document.createElement('span');
+    span.className = levelClass(l);
+    span.textContent = l + '\n';
+    frag.appendChild(span);
+  }
+  output.appendChild(frag);
+  if (autoScroll.checked && wasBottom) output.scrollTop = output.scrollHeight;
+}
+
+function appendLines(lines) {
+  if (!lines.length) return;
+  allLines.push(...lines);
+  // cap DOM+buffer at 5000 lines
+  if (allLines.length > 5000) allLines = allLines.slice(-5000);
+  applyFilter();
+}
+
+async function loadFile(file) {
+  allLines = [];
+  currentOffset = 0;
+  output.innerHTML = '';
+  statusEl.textContent = 'Loading…';
   try {
-    const r = await fetch('/api/logs?since=' + lastN);
+    const r = await fetch(`/api/logs?file=${file}&tail=300`);
     const data = await r.json();
-    if (data.lines && data.lines.length) {
-      const wasBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 40;
-      for (const l of data.lines) {
-        const span = document.createElement('span');
-        span.className = levelClass(l.level);
-        span.textContent = l.msg + '\n';
-        output.appendChild(span);
-        lastN = Math.max(lastN, l.n);
-      }
-      // Keep buffer manageable in the DOM
-      while (output.childNodes.length > 600) output.removeChild(output.firstChild);
-      if (autoScroll.checked && wasBottom) output.scrollTop = output.scrollHeight;
+    if (data.missing) {
+      output.textContent = `Log file not found: ${file}.log`;
+      output.style.color = '#888';
+      statusEl.textContent = '';
+      return;
     }
+    output.style.color = '';
+    currentOffset = data.offset;
+    appendLines(data.lines || []);
+    output.scrollTop = output.scrollHeight;
+    statusEl.textContent = 'Loaded · ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    statusEl.textContent = 'Error loading logs';
+  }
+}
+
+async function pollNew() {
+  try {
+    const r = await fetch(`/api/logs?file=${currentFile}&offset=${currentOffset}`);
+    const data = await r.json();
+    if (data.offset !== undefined) currentOffset = data.offset;
+    const wasBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 60;
+    appendLines(data.lines || []);
+    if (data.lines && data.lines.length && autoScroll.checked && wasBottom)
+      output.scrollTop = output.scrollHeight;
     statusEl.textContent = 'Live · ' + new Date().toLocaleTimeString();
-  } catch (err) {
+  } catch(e) {
     statusEl.textContent = 'Connection error';
   }
 }
 
-fetchLogs();
-setInterval(fetchLogs, 2000);
+function switchFile(file) {
+  currentFile = file;
+  document.querySelectorAll('.log-file-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.file === file);
+  });
+  clearInterval(pollTimer);
+  loadFile(file).then(() => {
+    pollTimer = setInterval(pollNew, 2000);
+  });
+}
+
+switchFile('app');
 {% endif %}
 </script>
 {% endblock %}
