@@ -593,8 +593,14 @@ def reorder_locations():
 
 # ── settings ──────────────────────────────────────────────────────────────────
 
-_DB_TABLES  = ('locations', 'location_sources', 'forecast_snapshots')
 _DB_PAGE_SIZE = 200
+
+
+def _db_tables() -> list[str]:
+    with db.get_db() as conn:
+        return [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        )]
 
 
 @app.route('/settings')
@@ -624,9 +630,10 @@ def settings_page():
     except json.JSONDecodeError:
         stored_delays = {}
 
+    all_db_tables = _db_tables()
     db_tables_summary = []
     with db.get_db() as conn:
-        for t in _DB_TABLES:
+        for t in all_db_tables:
             count = conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]
             cols  = [r[1] for r in conn.execute(f'PRAGMA table_info({t})')]
             db_tables_summary.append({'name': t, 'count': count, 'cols': cols})
@@ -637,7 +644,7 @@ def settings_page():
     db_filters = {k[2:]: v for k, v in request.args.items()
                   if k.startswith('f_') and v.strip()}
 
-    if db_active_table and db_active_table in _DB_TABLES:
+    if db_active_table and db_active_table in all_db_tables:
         with db.get_db() as conn:
             db_cols  = [r[1] for r in conn.execute(f'PRAGMA table_info({db_active_table})')]
             db_total = conn.execute(f'SELECT COUNT(*) FROM {db_active_table}').fetchone()[0]
@@ -750,7 +757,7 @@ def settings_save_providers():
 def db_overview():
     tables = []
     with db.get_db() as conn:
-        for t in _DB_TABLES:
+        for t in _db_tables():
             count = conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]
             cols  = [r[1] for r in conn.execute(f'PRAGMA table_info({t})')]
             tables.append({'name': t, 'count': count, 'cols': cols})
@@ -759,7 +766,7 @@ def db_overview():
 
 @app.route('/db/<table>')
 def db_table(table):
-    if table not in _DB_TABLES:
+    if table not in _db_tables():
         return redirect(url_for('db_overview'))
 
     page    = max(0, int(request.args.get('page', 0)))
@@ -786,7 +793,7 @@ def db_table(table):
 
     tables_summary = []
     with db.get_db() as conn:
-        for t in _DB_TABLES:
+        for t in _db_tables():
             count = conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]
             tables_summary.append({'name': t, 'count': count, 'cols': []})
 
