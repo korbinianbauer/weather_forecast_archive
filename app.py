@@ -709,7 +709,20 @@ def settings_save_schedule():
     cron = request.form.get('poll_cron', '').strip()
     if cron and len(cron.split()) == 5:
         db.set_setting('poll_cron', cron)
+        _notify_poller()
     return redirect(url_for('settings_page', tab='schedule'))
+
+
+def _notify_poller():
+    """Send SIGHUP to the poller process to reload its schedule."""
+    import signal as _signal
+    pidfile = os.path.join(os.path.dirname(__file__), 'poll.pid')
+    try:
+        with open(pidfile) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, _signal.SIGHUP)
+    except (OSError, ValueError):
+        pass
 
 
 @app.route('/settings/providers', methods=['POST'])

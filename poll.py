@@ -1,56 +1,78 @@
 """Standalone polling process — run separately from the web server."""
 import logging
+import os
 import signal
+import subprocess
 import sys
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 import db
-from poller import poll_all_due
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CRON = '0 6 * * *'
-_current_cron: str | None = None
+_cwd = os.path.dirname(os.path.abspath(__file__))
+PIDFILE = os.path.join(_cwd, 'poll.pid')
+
+
+def _run_poll():
+    """Run the poll in a subprocess so it always uses the latest code."""
+    try:
+        subprocess.run(
+            [sys.executable, '-c',
+             'import db; db.init_db(); from poller import poll_all_due; poll_all_due()'],
+            cwd=_cwd,
+            check=False,
+        )
+    except Exception as e:
+        logger.error('Poll subprocess error: %s', e)
 
 
 def _load_cron() -> str:
     return db.get_setting('poll_cron', _DEFAULT_CRON).strip() or _DEFAULT_CRON
 
 
-def _check_schedule(scheduler: BlockingScheduler):
-    global _current_cron
-    cron = _load_cron()
-    if cron == _current_cron:
-        return
-    try:
-        scheduler.reschedule_job('poll', trigger=CronTrigger.from_crontab(cron))
-        logger.info('Poll schedule updated: %s', cron)
-        _current_cron = cron
-    except Exception as e:
-        logger.error('Failed to apply new poll schedule %r: %s', cron, e)
-
-
 def _shutdown(signum, frame):
     logger.info('Shutting down poller')
+    try:
+        os.unlink(PIDFILE)
+    except OSError:
+        pass
     sys.exit(0)
 
 
 if __name__ == '__main__':
+    # Write PID file
+    with open(PIDFILE, 'w') as f:
+        f.write(str(os.getpid()))
+
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
     db.init_db()
     cron = _load_cron()
-    _current_cron = cron
 
     scheduler = BlockingScheduler()
-    scheduler.add_job(poll_all_due, CronTrigger.from_crontab(cron), id='poll')
-    scheduler.add_job(
-        lambda: _check_schedule(scheduler),
-        'interval', minutes=1, id='watch_schedule',
-    )
+    scheduler.add_job(_run_poll, CronTrigger.from_crontab(cron), id='poll')
     logger.info('Poller started — schedule: %s', cron)
-    scheduler.start()
+
+    def _reload_schedule(signum, frame):
+        new_cron = _load_cron()
+        try:
+            scheduler.reschedule_job('poll', trigger=CronTrigger.from_crontab(new_cron))
+            logger.info('Poll schedule reloaded: %s', new_cron)
+        except Exception as e:
+            logger.error('Failed to apply poll schedule %r: %s', new_cron, e)
+
+    signal.signal(signal.SIGHUP, _reload_schedule)
+
+    try:
+        scheduler.start()
+    finally:
+        try:
+            os.unlink(PIDFILE)
+        except OSError:
+            pass
