@@ -252,6 +252,7 @@ def index():
         date_end=date_end,
         date_end_display=_fmt_date(date_end),
         polling_location_ids=list(_active_refreshes),
+        today_iso=_date.today().isoformat(),
     ))
     r.headers['Cache-Control'] = 'no-store'
     return r
