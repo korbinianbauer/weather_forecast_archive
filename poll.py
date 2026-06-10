@@ -18,15 +18,19 @@ _cwd = os.path.dirname(os.path.abspath(__file__))
 PIDFILE = os.path.join(_cwd, 'poll.pid')
 
 
+_POLL_CMD = (
+    'import logging; '
+    'logging.basicConfig(level=logging.INFO, '
+    '  format="%(asctime)s %(levelname)-8s %(name)s — %(message)s"); '
+    'import db; db.init_db(); '
+    'from poller import poll_all_due; poll_all_due()'
+)
+
+
 def _run_poll():
     """Run the poll in a subprocess so it always uses the latest code."""
     try:
-        subprocess.run(
-            [sys.executable, '-c',
-             'import db; db.init_db(); from poller import poll_all_due; poll_all_due()'],
-            cwd=_cwd,
-            check=False,
-        )
+        subprocess.run([sys.executable, '-c', _POLL_CMD], cwd=_cwd, check=False)
     except Exception as e:
         logger.error('Poll subprocess error: %s', e)
 
@@ -45,6 +49,17 @@ def _shutdown(signum, frame):
 
 
 if __name__ == '__main__':
+    # Singleton: exit if already running
+    if os.path.exists(PIDFILE):
+        try:
+            with open(PIDFILE) as f:
+                existing_pid = int(f.read().strip())
+            os.kill(existing_pid, 0)
+            logger.info('Poller already running as PID %d — exiting', existing_pid)
+            sys.exit(0)
+        except (OSError, ValueError):
+            pass  # stale PID file
+
     # Write PID file
     with open(PIDFILE, 'w') as f:
         f.write(str(os.getpid()))
