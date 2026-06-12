@@ -389,13 +389,15 @@ def get_forecasts_by_poll(
         return [dict(r) for r in rows]
 
 
-def get_available_forecast_dates(location_id: int) -> list[str]:
+def get_available_forecast_dates(location_id: int, granularity: str | None = None) -> list[str]:
     """All unique forecast dates archived for a location, newest first."""
+    clause = 'AND granularity = ?' if granularity else ''
+    params: list = [location_id] + ([granularity] if granularity else [])
     with get_db() as conn:
         return [r[0] for r in conn.execute(
-            '''SELECT DISTINCT date(forecast_time) FROM forecast_snapshots
-               WHERE location_id = ? ORDER BY forecast_time DESC''',
-            (location_id,),
+            f'''SELECT DISTINCT date(forecast_time) FROM forecast_snapshots
+                WHERE location_id = ? {clause} ORDER BY forecast_time DESC''',
+            params,
         )]
 
 
@@ -462,6 +464,32 @@ def get_forecast_evolution(
                 WHERE location_id = ? AND granularity = 'daily' AND date(forecast_time) = ?
                 {provider_clause}
                 ORDER BY fetched_at ASC''',
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_hourly_runs(
+    location_id: int,
+    target_date: str,
+    providers: list[str] | None = None,
+) -> list[dict]:
+    """All archived hourly entries whose forecast_time falls on target_date,
+    across every poll — one 'run' per (provider, fetched_at)."""
+    with get_db() as conn:
+        if providers:
+            ph = ','.join('?' * len(providers))
+            provider_clause = f'AND provider IN ({ph})'
+            params: list = [location_id, target_date] + list(providers)
+        else:
+            provider_clause = ''
+            params = [location_id, target_date]
+
+        rows = conn.execute(
+            f'''SELECT * FROM forecast_snapshots
+                WHERE location_id = ? AND granularity = 'hourly' AND date(forecast_time) = ?
+                {provider_clause}
+                ORDER BY fetched_at ASC, forecast_time ASC''',
             params,
         ).fetchall()
         return [dict(r) for r in rows]

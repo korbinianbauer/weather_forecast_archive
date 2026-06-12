@@ -36,6 +36,12 @@
   div.day-cell.evo-active { border-color: var(--primary); background: #dbeafe; outline: 2px solid var(--primary); outline-offset: -2px; }
   div.day-cell.evo-dimmed { opacity: 0.3; }
   .evolution-view { margin-top: .75rem; }
+  .evo-mode-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-bottom: .6rem; }
+  .evo-mode-toggle button {
+    padding: .3rem .7rem; font-size: .78rem; border: none; cursor: pointer;
+    color: var(--muted); background: var(--surface);
+  }
+  .evo-mode-toggle button.active { background: #3b82f6; color: #fff; cursor: default; }
   .day-grid { padding-left: 50px; padding-right: 12px; }
   .day-cell .dc-date { font-size: .62rem; font-weight: 700; color: var(--muted); white-space: nowrap; }
   .day-cell img.dc-icon { width: 30px; height: 30px; display: block; margin: .2rem auto; object-fit: contain; }
@@ -457,13 +463,28 @@ function buildEvolutionAxisDecorations(x0Str, x1Str, targetDate) {
 function renderEvolutionInline(locId, data) {
   const container = document.getElementById('evo-charts-' + locId);
   container.innerHTML = '';
+  const mode = data.mode || 'daily';
   const tracesAll = data.traces;
   const targetDate = data.target_date;
   const defaultProvider = data.default_provider;
   const providerLabels = data.provider_labels;
 
+  // daily-evolution / hourly toggle
+  const modeBar = document.createElement('div');
+  modeBar.className = 'evo-mode-toggle';
+  for (const [m, lbl] of [['daily', 'Daily evolution'], ['hourly', 'Hourly']]) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = lbl;
+    if (m === mode) b.classList.add('active');
+    else b.addEventListener('click', () => openEvolution(locId, targetDate, m));
+    modeBar.appendChild(b);
+  }
+  container.appendChild(modeBar);
+
   if (!tracesAll || !tracesAll.length) {
-    container.innerHTML = '<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">No evolution data for this date.</div>';
+    container.insertAdjacentHTML('beforeend',
+      `<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">No ${mode === 'hourly' ? 'hourly forecast' : 'evolution'} data for this date.</div>`);
     return;
   }
 
@@ -472,23 +493,34 @@ function renderEvolutionInline(locId, data) {
     const pad = n => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   }
-  tracesAll.forEach(t => { if (Array.isArray(t.x)) t.x = t.x.map(utcToLocal); });
+  // Daily mode plots poll timestamps (UTC → local); hourly mode plots
+  // forecast times, which are already in the location's local time.
+  if (mode !== 'hourly') {
+    tracesAll.forEach(t => { if (Array.isArray(t.x)) t.x = t.x.map(utcToLocal); });
+  }
   const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   const xRangeEnd = targetDate + 'T23:59:59';
-  const allXs = tracesAll.flatMap(t => Array.isArray(t.x) ? t.x : []).filter(Boolean);
-  const dataStart = allXs.length ? allXs.reduce((a, b) => a < b ? a : b) : targetDate;
-  const earliest16 = new Date(targetDate + 'T00:00:00');
-  earliest16.setDate(earliest16.getDate() - 16);
-  const xRangeStart = dataStart < earliest16.toISOString().slice(0, 19) ? dataStart : earliest16.toISOString().slice(0, 19);
+  let xRangeStart;
+  if (mode === 'hourly') {
+    xRangeStart = targetDate + 'T00:00:00';
+  } else {
+    const allXs = tracesAll.flatMap(t => Array.isArray(t.x) ? t.x : []).filter(Boolean);
+    const dataStart = allXs.length ? allXs.reduce((a, b) => a < b ? a : b) : targetDate;
+    const earliest16 = new Date(targetDate + 'T00:00:00');
+    earliest16.setDate(earliest16.getDate() - 16);
+    xRangeStart = dataStart < earliest16.toISOString().slice(0, 19) ? dataStart : earliest16.toISOString().slice(0, 19);
+  }
 
   const defaultLabel = defaultProvider ? (providerLabels[defaultProvider] || defaultProvider) : null;
 
+  // Legend keyed by legendgroup so per-poll hourly traces collapse to one provider entry
   const legendEntries = [], legendSeen = new Set();
   for (const t of tracesAll) {
-    if (t.showlegend && t.name && !legendSeen.has(t.name)) {
-      legendSeen.add(t.name);
-      legendEntries.push({ name: t.name, color: (t.line || {}).color || '#888' });
+    const key = t.legendgroup || t.name;
+    if (t.showlegend && key && !legendSeen.has(key)) {
+      legendSeen.add(key);
+      legendEntries.push({ name: key, color: (t.line || {}).color || '#888' });
     }
   }
   tracesAll.forEach(t => { t.showlegend = false; });
@@ -518,17 +550,36 @@ function renderEvolutionInline(locId, data) {
     container.appendChild(legendEl);
   }
 
-  const { shapes: axShapes, tickvals: axTickvals, ticktext: axTicktext } = buildEvolutionAxisDecorations(xRangeStart, xRangeEnd, targetDate);
+  let allChartShapes = [], xaxisLayout;
+  if (mode === 'hourly') {
+    xaxisLayout = {
+      type: 'date',
+      title: { text: 'Forecast time (local)', standoff: 8 },
+      gridcolor: '#e2e8f0',
+      dtick: 3 * 3600 * 1000,
+      tickformat: '%H:%M',
+      range: [xRangeStart, xRangeEnd], fixedrange: true,
+    };
+  } else {
+    const { shapes: axShapes, tickvals: axTickvals, ticktext: axTicktext } = buildEvolutionAxisDecorations(xRangeStart, xRangeEnd, targetDate);
 
-  // Permanent highlight on the target-date ("0d") column
-  const [_ty, _tm, _td] = targetDate.split('-').map(Number);
-  const _tgtNext = new Date(_ty, _tm-1, _td+1);
-  const _tgtNextStr = `${_tgtNext.getFullYear()}-${String(_tgtNext.getMonth()+1).padStart(2,'0')}-${String(_tgtNext.getDate()).padStart(2,'0')}`;
-  const _targetShape = { type:'rect', xref:'x', yref:'paper',
-    x0: targetDate+'T00:00:00', x1: _tgtNextStr+'T00:00:00',
-    y0:0, y1:1, fillcolor:'rgba(59,130,246,0.15)',
-    line:{ color:'#1a6fb5', width:2 }, layer:'below' };
-  const allChartShapes = [...axShapes, _targetShape];
+    // Permanent highlight on the target-date ("0d") column
+    const [_ty, _tm, _td] = targetDate.split('-').map(Number);
+    const _tgtNext = new Date(_ty, _tm-1, _td+1);
+    const _tgtNextStr = `${_tgtNext.getFullYear()}-${String(_tgtNext.getMonth()+1).padStart(2,'0')}-${String(_tgtNext.getDate()).padStart(2,'0')}`;
+    const _targetShape = { type:'rect', xref:'x', yref:'paper',
+      x0: targetDate+'T00:00:00', x1: _tgtNextStr+'T00:00:00',
+      y0:0, y1:1, fillcolor:'rgba(59,130,246,0.15)',
+      line:{ color:'#1a6fb5', width:2 }, layer:'below' };
+    allChartShapes = [...axShapes, _targetShape];
+    xaxisLayout = {
+      type: 'date',
+      title: { text: 'Poll timestamp (' + tzName + ')', standoff: 8 },
+      showgrid: false, tickmode: 'array',
+      tickvals: axTickvals, ticktext: axTicktext,
+      range: [xRangeStart, xRangeEnd], fixedrange: true,
+    };
+  }
 
   const metricsPresent = new Set(tracesAll.map(t => t.metric));
   const allMetrics = EVO_METRIC_ORDER.filter(m => metricsPresent.has(m));
@@ -563,13 +614,7 @@ function renderEvolutionInline(locId, data) {
     const yr = yRangeFromTraces(traces, metric);
     Plotly.newPlot(divId, traces, {
       margin: { t: 8, b: 50, l: 50, r: 12 },
-      xaxis: {
-        type: 'date',
-        title: { text: 'Poll timestamp (' + tzName + ')', standoff: 8 },
-        showgrid: false, tickmode: 'array',
-        tickvals: axTickvals, ticktext: axTicktext,
-        range: [xRangeStart, xRangeEnd], fixedrange: true,
-      },
+      xaxis: xaxisLayout,
       yaxis: { gridcolor: '#e2e8f0', zeroline: false, fixedrange: true,
                ...(yr ? { range: yr, autorange: false } : {}) },
       paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: '#f8fafc',
@@ -640,13 +685,14 @@ function drawEvolutionConnector(locId) {
   card.appendChild(svg);
 }
 
-function openEvolution(locId, date) {
+function openEvolution(locId, date, mode) {
   const evoEl  = document.getElementById('evo-' + locId);
   const plotEl = document.getElementById('plot-' + locId);
   const btn    = document.getElementById('plotbtn-' + locId);
 
   const prev = evoState[locId];
-  if (prev && prev.date === date) { closeEvolution(locId); return; }
+  mode = mode || (prev && prev.mode) || 'daily';
+  if (prev && prev.date === date && prev.mode === mode) { closeEvolution(locId); return; }
 
   closeEvolution(locId); // clean up any previous open state for this location
 
@@ -664,18 +710,18 @@ function openEvolution(locId, date) {
   const card = document.getElementById('card-' + locId);
   if (card) { card.classList.add('loc-evo-open'); card.style.position = 'relative'; }
 
-  evoState[locId] = { date };
+  evoState[locId] = { date, mode };
   updatePageTitle();
   evoEl.style.display = '';
 
   const chartsEl = document.getElementById('evo-charts-' + locId);
   chartsEl.innerHTML = '<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">Loading…</div>';
 
-  fetch(`/api/location/${locId}/evolution?date=${encodeURIComponent(date)}`)
+  fetch(`/api/location/${locId}/evolution?date=${encodeURIComponent(date)}&mode=${mode}`)
     .then(r => r.json())
     .then(data => {
       const cur = evoState[locId];
-      if (!cur || cur.date !== date) return;
+      if (!cur || cur.date !== date || cur.mode !== mode) return;
       renderEvolutionInline(locId, data);
       setTimeout(() => drawEvolutionConnector(locId), 120);
     })

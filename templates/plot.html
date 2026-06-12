@@ -15,6 +15,7 @@
 {# ── controls ── #}
 <div class="card gap">
   <form method="get" style="display:flex; flex-wrap:wrap; gap:1.25rem; align-items:flex-end;">
+    <input type="hidden" name="mode" value="{{ mode }}">
 
     <div>
       <label style="display:block; font-size:.8rem; font-weight:600; color:var(--muted); margin-bottom:.3rem;">
@@ -29,16 +30,38 @@
       </select>
     </div>
 
+    <div>
+      <label style="display:block; font-size:.8rem; font-weight:600; color:var(--muted); margin-bottom:.3rem;">
+        VIEW
+      </label>
+      <div class="mode-toggle">
+        <a href="{{ url_for('location_plot', location_id=location.id, mode='daily', date=target_date) }}"
+           class="{{ 'active' if mode == 'daily' }}">Daily evolution</a>
+        <a href="{{ url_for('location_plot', location_id=location.id, mode='hourly', date=target_date) }}"
+           class="{{ 'active' if mode == 'hourly' }}">Hourly</a>
+      </div>
+    </div>
+
   </form>
 
   {% if target_date %}
   <div style="margin-top:.75rem; font-size:.82rem; color:var(--muted);">
+    {% if mode == 'hourly' %}
+    Showing every archived hourly forecast curve for <strong>{{ target_date }}</strong> — older polls are drawn fainter.
+    {% else %}
     Showing how the daily forecast for <strong>{{ target_date }}</strong> changed over time.
+    {% endif %}
   </div>
   {% endif %}
 </div>
 
 <style>
+  .mode-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .mode-toggle a {
+    padding: .45rem .8rem; font-size: .875rem; text-decoration: none;
+    color: var(--muted); background: var(--surface);
+  }
+  .mode-toggle a.active { background: #3b82f6; color: #fff; }
   .plot-charts     { display: flex; flex-direction: column; gap: .75rem; }
   .plot-chart-wrap { background: #f8fafc; border-radius: 6px; overflow: hidden; }
   .plot-chart-label {
@@ -64,6 +87,7 @@
 <script>
 (function () {
   const tracesAll = {{ traces_json|safe }};
+  const mode = {{ mode | tojson }};
   if (!tracesAll.length) return;
 
   function utcToLocal(isoStr) {
@@ -71,7 +95,11 @@
     const pad = n => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   }
-  tracesAll.forEach(t => { if (Array.isArray(t.x)) t.x = t.x.map(utcToLocal); });
+  // Daily mode plots poll timestamps (UTC → local); hourly mode plots
+  // forecast times, which are already in the location's local time.
+  if (mode !== 'hourly') {
+    tracesAll.forEach(t => { if (Array.isArray(t.x)) t.x = t.x.map(utcToLocal); });
+  }
   const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   const METRIC_ORDER = [
@@ -147,19 +175,26 @@
 
   const targetDate = {{ target_date | tojson }};  // "YYYY-MM-DD"
   const xRangeEnd = targetDate + 'T23:59:59';
-  const allXs = tracesAll.flatMap(t => Array.isArray(t.x) ? t.x : []).filter(Boolean);
-  const dataStart = allXs.length ? allXs.reduce((a, b) => a < b ? a : b) : targetDate;
-  const earliest16 = new Date(targetDate + 'T00:00:00');
-  earliest16.setDate(earliest16.getDate() - 16);
-  const xRangeStart = dataStart < earliest16.toISOString().slice(0, 19) ? dataStart : earliest16.toISOString().slice(0, 19);
+  let xRangeStart;
+  if (mode === 'hourly') {
+    xRangeStart = targetDate + 'T00:00:00';
+  } else {
+    const allXs = tracesAll.flatMap(t => Array.isArray(t.x) ? t.x : []).filter(Boolean);
+    const dataStart = allXs.length ? allXs.reduce((a, b) => a < b ? a : b) : targetDate;
+    const earliest16 = new Date(targetDate + 'T00:00:00');
+    earliest16.setDate(earliest16.getDate() - 16);
+    xRangeStart = dataStart < earliest16.toISOString().slice(0, 19) ? dataStart : earliest16.toISOString().slice(0, 19);
+  }
 
   // Collect unique legend entries before suppressing showlegend
+  // (keyed by legendgroup so per-poll hourly traces collapse to one provider entry)
   const legendEntries = [];
   const legendSeen = new Set();
   for (const t of tracesAll) {
-    if (t.showlegend && t.name && !legendSeen.has(t.name)) {
-      legendSeen.add(t.name);
-      legendEntries.push({ name: t.name, color: (t.line || {}).color || '#888' });
+    const key = t.legendgroup || t.name;
+    if (t.showlegend && key && !legendSeen.has(key)) {
+      legendSeen.add(key);
+      legendEntries.push({ name: key, color: (t.line || {}).color || '#888' });
     }
   }
   tracesAll.forEach(t => { t.showlegend = false; });
@@ -198,7 +233,9 @@
   const metricsPresent = new Set(tracesAll.map(t => t.metric));
   const allMetrics = METRIC_ORDER.filter(m => metricsPresent.has(m));
   const divIds = [];
-  const { shapes: axShapes, tickvals: axTickvals, ticktext: axTicktext } = buildAxisDecorations(xRangeStart, xRangeEnd);
+  const { shapes: axShapes, tickvals: axTickvals, ticktext: axTicktext } =
+    mode === 'hourly' ? { shapes: [], tickvals: [], ticktext: [] }
+                      : buildAxisDecorations(xRangeStart, xRangeEnd);
 
   for (const metric of allMetrics) {
     const wrapper = document.createElement('div');
@@ -220,6 +257,27 @@
 
   const traceMap = {}; // divId -> { name -> [traceIndices] }
 
+  const xaxisLayout = mode === 'hourly'
+    ? {
+        type: 'date',
+        title: { text: 'Forecast time (local)', standoff: 8 },
+        gridcolor: '#e2e8f0',
+        dtick: 3 * 3600 * 1000,
+        tickformat: '%H:%M',
+        range: [xRangeStart, xRangeEnd],
+        fixedrange: true,
+      }
+    : {
+        type: 'date',
+        title: { text: 'Poll timestamp (' + tzName + ')', standoff: 8 },
+        showgrid: false,
+        tickmode: 'array',
+        tickvals: axTickvals,
+        ticktext: axTicktext,
+        range: [xRangeStart, xRangeEnd],
+        fixedrange: true,
+      };
+
   for (let mi = 0; mi < allMetrics.length; mi++) {
     const metric = allMetrics[mi];
     const traces = tracesAll.filter(t => t.metric === metric);
@@ -234,16 +292,7 @@
     const yr = yRangeFromTraces(traces, metric);
     const layout = {
       margin:      { t: 8, b: 50, l: 50, r: 12 },
-      xaxis: {
-        type: 'date',
-        title: { text: 'Poll timestamp (' + tzName + ')', standoff: 8 },
-        showgrid: false,
-        tickmode: 'array',
-        tickvals: axTickvals,
-        ticktext: axTicktext,
-        range: [xRangeStart, xRangeEnd],
-        fixedrange: true,
-      },
+      xaxis: xaxisLayout,
       yaxis: { gridcolor: '#e2e8f0', zeroline: false, fixedrange: true,
                ...(yr ? { range: yr, autorange: false } : {}) },
       paper_bgcolor: 'rgba(0,0,0,0)',

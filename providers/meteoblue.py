@@ -1,6 +1,7 @@
 import logging
 import re
 import time
+from datetime import date, timedelta
 from typing import Optional
 from urllib.parse import quote
 
@@ -32,7 +33,7 @@ class MeteoblueProvider(WeatherProvider):
     display_name = 'Meteoblue'
 
     supports_daily = True
-    supports_hourly = False
+    supports_hourly = True
 
     def search(self, query: str) -> list[LocationResult]:
         url = f'{_BASE}/en/server/search/query3?query={quote(query)}'
@@ -56,21 +57,33 @@ class MeteoblueProvider(WeatherProvider):
             return []
 
     def fetch_daily(self, provider_location_id: str, extra: dict) -> list[ForecastEntry]:
+        entries = self._fetch_week(provider_location_id)
+        soups = _fetch_oneday_pages(provider_location_id, len(entries))
+        _apply_precip_probs(entries, soups)
+        return entries
+
+    def fetch_hourly(self, provider_location_id: str, extra: dict) -> list[ForecastEntry]:
+        daily = self._fetch_week(provider_location_id)
+        soups = _fetch_oneday_pages(provider_location_id, len(daily))
+        return _parse_hourly(soups, [e.forecast_time[:10] for e in daily])
+
+    def fetch_all(self, provider_location_id: str, extra: dict) -> list[ForecastEntry]:
+        # Daily precip probabilities and 3-hourly entries come from the same
+        # oneday pages — fetch them once and use them for both.
+        entries = self._fetch_week(provider_location_id)
+        soups = _fetch_oneday_pages(provider_location_id, len(entries))
+        _apply_precip_probs(entries, soups)
+        return entries + _parse_hourly(soups, [e.forecast_time[:10] for e in entries])
+
+    def _fetch_week(self, provider_location_id: str) -> list[ForecastEntry]:
         url = f'{_BASE}/en/weather/forecast/week/{provider_location_id}'
         try:
             resp = requests.get(url, headers=_HEADERS, timeout=20)
             resp.raise_for_status()
-            entries = _parse_week(resp.text)
+            return _parse_week(resp.text)
         except Exception as e:
             logger.error('Meteoblue daily fetch failed for %s: %s', provider_location_id, e)
             return []
-
-        probs = _fetch_precip_probs(provider_location_id, len(entries))
-        for i, entry in enumerate(entries):
-            if i in probs:
-                entry.precip_probability = probs[i]
-
-        return entries
 
 
 # ── HTML parsing ──────────────────────────────────────────────────────────────
@@ -135,32 +148,121 @@ def _parse_day_tab(tab) -> ForecastEntry:
     )
 
 
-def _fetch_precip_probs(location_id: str, num_days: int) -> dict[int, int]:
-    """Fetch max daily precipitation probability for each day via per-day detail endpoint."""
-    probs: dict[int, int] = {}
+def _fetch_oneday_pages(location_id: str, num_days: int) -> dict[int, BeautifulSoup]:
+    """Fetch the per-day detail pages (3-hourly tables); keys are 1-based day numbers."""
+    soups: dict[int, BeautifulSoup] = {}
     detail_headers = {**_HEADERS, 'X-Requested-With': 'XMLHttpRequest'}
     for day_num in range(1, num_days + 1):
         url = f'{_BASE}/en/weather/week/oneday/{location_id}?day={day_num}'
         try:
             resp = requests.get(url, headers=detail_headers, timeout=10)
             resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            tbl = soup.find('table')
-            if tbl:
-                prob_row = tbl.find('tr', class_='precipprobs')
-                if prob_row:
-                    max_prob = 0
-                    for td in prob_row.find_all('td'):
-                        sp = td.find(class_='precip-prob')
-                        if sp:
-                            val = _parse_int(sp.get_text(strip=True).rstrip('%'))
-                            if val is not None:
-                                max_prob = max(max_prob, val)
-                    probs[day_num - 1] = max_prob
+            soups[day_num] = BeautifulSoup(resp.text, 'html.parser')
         except Exception as e:
-            logger.warning('Meteoblue precip prob fetch failed for day %d: %s', day_num, e)
+            logger.warning('Meteoblue oneday fetch failed for day %d: %s', day_num, e)
         time.sleep(db.get_provider_delay('meteoblue'))
-    return probs
+    return soups
+
+
+def _apply_precip_probs(entries: list[ForecastEntry], soups: dict[int, BeautifulSoup]) -> None:
+    """Set each daily entry's precip_probability to the day's max 3-hourly probability."""
+    for i, entry in enumerate(entries):
+        soup = soups.get(i + 1)
+        tbl = soup.find('table') if soup else None
+        prob_row = tbl.find('tr', class_='precipprobs') if tbl else None
+        if not prob_row:
+            continue
+        max_prob = 0
+        for td in prob_row.find_all('td'):
+            sp = td.find(class_='precip-prob')
+            if sp:
+                val = _parse_int(sp.get_text(strip=True).rstrip('%'))
+                if val is not None:
+                    max_prob = max(max_prob, val)
+        entry.precip_probability = max_prob
+
+
+# ── 3-hourly parsing ──────────────────────────────────────────────────────────
+
+def _parse_hourly(soups: dict[int, BeautifulSoup], dates: list[str]) -> list[ForecastEntry]:
+    result = []
+    for day_num, soup in sorted(soups.items()):
+        if day_num - 1 >= len(dates):
+            continue
+        try:
+            base = date.fromisoformat(dates[day_num - 1])
+        except ValueError:
+            continue
+        try:
+            result.extend(_parse_oneday(soup, base))
+        except Exception as e:
+            logger.warning('Meteoblue oneday parse failed for day %d: %s', day_num, e)
+    return result
+
+
+def _parse_oneday(soup: BeautifulSoup, base: date) -> list[ForecastEntry]:
+    """Parse one oneday table (columns at 03:00 … 24:00 local time) into 3-hourly entries."""
+    tbl = soup.find('table')
+    if not tbl:
+        return []
+
+    def data_cells(cls: str) -> list:
+        row = tbl.find('tr', class_=cls)
+        return row.find_all('td') if row else []
+
+    times = []
+    for td in data_cells('times'):
+        m = re.search(r'(\d{1,2})\s', td.get_text(' ', strip=True) + ' ')
+        times.append(int(m.group(1)) if m else None)
+
+    cols: dict[str, list] = {}
+    cols['temperature'] = [_parse_signed_int(td.get_text()) for td in data_cells('temperatures')]
+    cols['wind_direction'] = [(td.get_text(strip=True) or None) for td in data_cells('winddirs')]
+    cols['wind_speed'] = [_parse_int(td.get_text()) for td in data_cells('windspeeds')]
+    cols['precip_probability'] = [_parse_int(td.get_text()) for td in data_cells('precipprobs')]
+    # find('tr', class_='precips') matches the plain row, not the
+    # 'precips precip-hourly-title' interval row further down.
+    cols['precip_amount'] = [
+        _parse_precip_amount(re.sub(r'\d+\s*%', '', td.get_text(' ', strip=True)))
+        for td in data_cells('precips')
+    ]
+
+    conds, icons = [], []
+    for td in data_cells('icons'):
+        img = td.find('img')
+        conds.append((img.get('title') or img.get('alt')) if img else None)
+        icons.append(img.get('src') if img else None)
+    cols['condition_text'] = conds
+    cols['icon_url'] = icons
+
+    def col(name: str, j: int):
+        vals = cols.get(name)
+        return vals[j] if vals and j < len(vals) else None
+
+    result = []
+    for j, hour in enumerate(times):
+        if hour is None:
+            continue
+        day = base + timedelta(days=hour // 24)
+        entry = ForecastEntry(
+            forecast_time=f'{day}T{hour % 24:02d}:00:00',
+            granularity='hourly',
+            condition_text=col('condition_text', j),
+            icon_url=col('icon_url', j),
+            temperature=col('temperature', j),
+            precip_probability=col('precip_probability', j),
+            precip_amount=col('precip_amount', j),
+            wind_direction=col('wind_direction', j),
+            wind_speed=col('wind_speed', j),
+        )
+        if entry.temperature is not None:
+            result.append(entry)
+    return result
+
+
+def _parse_signed_int(text: str) -> Optional[int]:
+    m = re.search(r'(-?\d+)', _clean(text))
+    return int(m.group(1)) if m else None
 
 
 # ── value parsers ─────────────────────────────────────────────────────────────
