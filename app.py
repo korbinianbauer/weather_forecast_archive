@@ -179,14 +179,18 @@ def fmt_opt(value, suffix=''):
     return f'{value}{suffix}' if value is not None else '—'
 
 
-@app.context_processor
-def inject_provider_colors():
+def _load_provider_colors() -> dict[str, str]:
     try:
         colors = json.loads(db.get_setting('provider_colors', '{}'))
     except json.JSONDecodeError:
         colors = {}
     defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e'}
-    return {'provider_colors': {**defaults, **colors}}
+    return {**defaults, **colors}
+
+
+@app.context_processor
+def inject_provider_colors():
+    return {'provider_colors': _load_provider_colors()}
 
 
 # ── provider color helpers ────────────────────────────────────────────────────
@@ -199,13 +203,7 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
-def _provider_rgba(provider: str, alpha: float) -> str:
-    try:
-        colors = json.loads(db.get_setting('provider_colors', '{}'))
-    except json.JSONDecodeError:
-        colors = {}
-    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e'}
-    hex_color = {**defaults, **colors}.get(provider, _DEFAULT_COLOR_HEX)
+def _rgba(hex_color: str, alpha: float) -> str:
     r, g, b = _hex_to_rgb(hex_color)
     return f'rgba({r},{g},{b},{alpha:.2f})'
 
@@ -337,45 +335,16 @@ def add_location():
     return redirect(url_for('index'))
 
 
-@app.route('/location/<int:location_id>/plot')
-def location_plot(location_id):
-    location = db.get_location(location_id)
-    if not location:
-        return redirect(url_for('index'))
-
-    sources = db.get_location_sources(location_id)
-    provider_labels = {p.name: p.display_name for p in providers.all_providers()}
-    mode = 'hourly' if request.args.get('mode') == 'hourly' else 'daily'
-    available_dates = db.get_available_forecast_dates(
-        location_id, granularity='hourly' if mode == 'hourly' else None)
-    all_provider_names = [s['provider'] for s in sources]
-
-    target_date = request.args.get('date', '')
-    if target_date not in available_dates:
-        target_date = available_dates[0] if available_dates else ''
-    url_providers = request.args.getlist('providers')
-    default_provider = url_providers[0] if len(url_providers) == 1 else None
-
-    if not target_date:
-        traces = []
-    elif mode == 'hourly':
-        rows = db.get_hourly_runs(location_id, target_date, all_provider_names)
-        traces = _build_hourly_traces(rows, provider_labels)
-    else:
-        rows = db.get_forecast_evolution(location_id, target_date, all_provider_names)
-        traces = _build_evolution_traces(rows, provider_labels)
-
-    return render_template(
-        'plot.html',
-        location=location,
-        mode=mode,
-        available_dates=available_dates,
-        target_date=target_date,
-        all_providers=all_provider_names,
-        provider_labels=provider_labels,
-        default_provider=default_provider,
-        traces_json=json.dumps(traces),
-    )
+# DB field → metric key used by the chart JS (shared by both trace builders)
+_SIMPLE_METRICS = [
+    ('sunshine_hours',     'sunshine_hours'),
+    ('precip_probability', 'precipitation_precip_probability'),
+    ('precip_amount',      'precipitation_precip_amount'),
+    ('wind_speed',         'wind_wind_speed'),
+    ('cloud_cover',        'cloud_cloud_cover'),
+    ('pressure',           'pressure_pressure'),
+    ('humidity',           'humidity_humidity'),
+]
 
 
 def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dict]:
@@ -388,22 +357,15 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
     for key in groups:
         groups[key].sort(key=lambda r: r['fetched_at'])
 
-    simple_metrics = [
-        ('sunshine_hours',     'sunshine_hours'),
-        ('precip_probability', 'precipitation_precip_probability'),
-        ('precip_amount',      'precipitation_precip_amount'),
-        ('wind_speed',         'wind_wind_speed'),
-        ('cloud_cover',        'cloud_cloud_cover'),
-        ('pressure',           'pressure_pressure'),
-        ('humidity',           'humidity_humidity'),
-    ]
+    provider_colors = _load_provider_colors()
 
     all_traces = []
     legend_shown: set[str] = set()
 
     for (provider, granularity), entries in sorted(groups.items()):
-        color      = _provider_rgba(provider, 1.0)
-        fill_color = _provider_rgba(provider, 0.15)
+        hex_color  = provider_colors.get(provider, _DEFAULT_COLOR_HEX)
+        color      = _rgba(hex_color, 1.0)
+        fill_color = _rgba(hex_color, 0.15)
         label      = provider_labels.get(provider, provider)
         xs = [e['fetched_at'] for e in entries]
 
@@ -476,7 +438,7 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
                 'metric': 'temperature', 'legendgroup': label,
             })
 
-        for field, metric_key in simple_metrics:
+        for field, metric_key in _SIMPLE_METRICS:
             ys = [e.get(field) for e in entries]
             show = label not in legend_shown
             if show:
@@ -503,19 +465,13 @@ def _build_hourly_traces(rows: list[dict], provider_labels: dict) -> list[dict]:
     for row in rows:
         by_provider[row['provider']][row['fetched_at']].append(row)
 
-    metrics = [
-        ('temperature',        'temperature'),
-        ('precip_probability', 'precipitation_precip_probability'),
-        ('precip_amount',      'precipitation_precip_amount'),
-        ('wind_speed',         'wind_wind_speed'),
-        ('cloud_cover',        'cloud_cloud_cover'),
-        ('pressure',           'pressure_pressure'),
-        ('humidity',           'humidity_humidity'),
-    ]
+    provider_colors = _load_provider_colors()
+    metrics = [('temperature', 'temperature')] + _SIMPLE_METRICS
 
     traces = []
     for provider in sorted(by_provider):
         label = provider_labels.get(provider, provider)
+        hex_color = provider_colors.get(provider, _DEFAULT_COLOR_HEX)
         polls = sorted(by_provider[provider])
         n = len(polls)
         for i, fetched_at in enumerate(polls):
@@ -523,7 +479,7 @@ def _build_hourly_traces(rows: list[dict], provider_labels: dict) -> list[dict]:
                              key=lambda e: e['forecast_time'])
             newest = i == n - 1
             alpha = 1.0 if newest else 0.15 + 0.55 * (i + 1) / n
-            color = _provider_rgba(provider, alpha)
+            color = _rgba(hex_color, alpha)
             xs = [e['forecast_time'] for e in entries]
             name = f"{label} · {fetched_at[:16].replace('T', ' ')}"
             for field, metric_key in metrics:
@@ -835,66 +791,6 @@ def settings_save_providers():
     db.set_setting('provider_colors', json.dumps(colors))
     db.set_setting('provider_delays', json.dumps(delays))
     return redirect(url_for('settings_page', tab='providers'))
-
-
-# ── db browser (legacy standalone routes kept for compatibility) ──────────────
-
-@app.route('/db')
-def db_overview():
-    tables = []
-    with db.get_db() as conn:
-        for t in _db_tables():
-            count = conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]
-            cols  = [r[1] for r in conn.execute(f'PRAGMA table_info({t})')]
-            tables.append({'name': t, 'count': count, 'cols': cols})
-    return render_template('db_browser.html', tables=tables, active_table=None)
-
-
-@app.route('/db/<table>')
-def db_table(table):
-    if table not in _db_tables():
-        return redirect(url_for('db_overview'))
-
-    page    = max(0, int(request.args.get('page', 0)))
-    filters = {k: v for k, v in request.args.items() if k not in ('page',) and v.strip()}
-
-    with db.get_db() as conn:
-        cols  = [r[1] for r in conn.execute(f'PRAGMA table_info({table})')]
-        total = conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
-
-        where_parts, params = [], []
-        for col, val in filters.items():
-            if col in cols:
-                where_parts.append(f'{col} LIKE ?')
-                params.append(f'%{val}%')
-        where = ('WHERE ' + ' AND '.join(where_parts)) if where_parts else ''
-
-        filtered_total = conn.execute(
-            f'SELECT COUNT(*) FROM {table} {where}', params
-        ).fetchone()[0]
-        rows = [list(r) for r in conn.execute(
-            f'SELECT * FROM {table} {where} LIMIT ? OFFSET ?',
-            params + [_DB_PAGE_SIZE, page * _DB_PAGE_SIZE],
-        ).fetchall()]
-
-    tables_summary = []
-    with db.get_db() as conn:
-        for t in _db_tables():
-            count = conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]
-            tables_summary.append({'name': t, 'count': count, 'cols': []})
-
-    return render_template(
-        'db_browser.html',
-        tables=tables_summary,
-        active_table=table,
-        cols=cols,
-        rows=rows,
-        total=total,
-        filtered_total=filtered_total,
-        page=page,
-        page_size=_DB_PAGE_SIZE,
-        filters=filters,
-    )
 
 
 # ── log API ───────────────────────────────────────────────────────────────────
