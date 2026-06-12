@@ -77,3 +77,21 @@ class WeatherProvider(ABC):
     ) -> list[ForecastEntry]:
         """Return ForecastEntry objects with granularity='hourly' for ≥1 day."""
         raise NotImplementedError
+
+    def fetch_all(
+        self,
+        provider_location_id: str,
+        extra: dict,
+    ) -> list[ForecastEntry]:
+        """
+        Return all supported granularities in one batch.
+
+        Override when daily and hourly data come from the same pages so the
+        HTTP requests can be shared instead of fetching twice.
+        """
+        entries: list[ForecastEntry] = []
+        if self.supports_daily:
+            entries.extend(self.fetch_daily(provider_location_id, extra))
+        if self.supports_hourly:
+            entries.extend(self.fetch_hourly(provider_location_id, extra))
+        return entries

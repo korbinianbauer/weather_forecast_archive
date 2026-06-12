@@ -25,7 +25,7 @@ class WetterComProvider(WeatherProvider):
     display_name = 'Wetter.com'
 
     supports_daily = True
-    supports_hourly = False
+    supports_hourly = True
 
     def search(self, query: str) -> list[LocationResult]:
         url = f'{_BASE}/search/autosuggest/{quote(query)}'
@@ -51,26 +51,34 @@ class WetterComProvider(WeatherProvider):
             return []
 
     def fetch_daily(self, provider_location_id: str, extra: dict) -> list[ForecastEntry]:
+        entries = self._fetch_16day(provider_location_id, extra)
+        tables = _fetch_detail_tables(extra.get('seo_string', ''), provider_location_id)
+        _apply_detail_extras(entries, tables)
+        return entries
+
+    def fetch_hourly(self, provider_location_id: str, extra: dict) -> list[ForecastEntry]:
+        tables = _fetch_detail_tables(extra.get('seo_string', ''), provider_location_id)
+        return _parse_hourly_tables(tables)
+
+    def fetch_all(self, provider_location_id: str, extra: dict) -> list[ForecastEntry]:
+        # Daily extras and hourly entries come from the same detail pages —
+        # fetch them once and use them for both.
+        entries = self._fetch_16day(provider_location_id, extra)
+        tables = _fetch_detail_tables(extra.get('seo_string', ''), provider_location_id)
+        _apply_detail_extras(entries, tables)
+        return entries + _parse_hourly_tables(tables)
+
+    def _fetch_16day(self, provider_location_id: str, extra: dict) -> list[ForecastEntry]:
         seo = extra.get('seo_string', '')
         url = (f'{_BASE}/wetter_aktuell/wettervorhersage/'
                f'16_tagesvorhersage/{seo}/{provider_location_id}.html')
         try:
             resp = requests.get(url, headers=_HEADERS, timeout=20)
             resp.raise_for_status()
-            entries = _parse_daily(resp.text)
+            return _parse_daily(resp.text)
         except Exception as e:
             logger.error('Wetter.com daily fetch failed for %s: %s', provider_location_id, e)
             return []
-
-        detail_by_date = _fetch_detail_extras(seo, provider_location_id)
-        for entry in entries:
-            d = detail_by_date.get(entry.forecast_time[:10])
-            if d:
-                entry.cloud_cover = d.get('cloud_cover')
-                entry.humidity = d.get('humidity')
-                entry.pressure = d.get('pressure')
-
-        return entries
 
 
 # ── HTML parsing ──────────────────────────────────────────────────────────────
@@ -145,10 +153,10 @@ def _parse_daily_row(row, ref: date, sun_by_idx: dict) -> ForecastEntry:
     )
 
 
-def _fetch_detail_extras(seo: str, loc_id: str) -> dict[str, dict]:
-    """Fetch per-day detail pages (today + 7 days ahead) to extract cloud_cover, humidity, pressure."""
+def _fetch_detail_tables(seo: str, loc_id: str) -> dict[str, 'BeautifulSoup']:
+    """Fetch per-day detail pages (today + 7 days ahead) and return date → hourly diagram table."""
     today = date.today()
-    result: dict[str, dict] = {}
+    result: dict[str, BeautifulSoup] = {}
 
     for offset in range(8):
         target = today + timedelta(days=offset)
@@ -165,13 +173,139 @@ def _fetch_detail_extras(seo: str, loc_id: str) -> dict[str, dict]:
             soup = BeautifulSoup(resp.text, 'html.parser')
             table = soup.find('table', id='vhs-detail-diagram')
             if table:
-                result[str(target)] = _parse_detail_extras(table)
+                result[str(target)] = table
         except Exception as e:
             logger.warning('Wetter.com detail fetch +%d failed: %s', offset, e)
 
         time.sleep(db.get_provider_delay('wetter_com'))
 
     return result
+
+
+def _apply_detail_extras(entries: list[ForecastEntry], tables: dict) -> None:
+    """Fill daily cloud_cover / humidity / pressure means from the hourly diagram tables."""
+    for entry in entries:
+        table = tables.get(entry.forecast_time[:10])
+        if table is None:
+            continue
+        d = _parse_detail_extras(table)
+        entry.cloud_cover = d.get('cloud_cover')
+        entry.humidity = d.get('humidity')
+        entry.pressure = d.get('pressure')
+
+
+# ── hourly parsing ────────────────────────────────────────────────────────────
+
+def _parse_hourly_tables(tables: dict) -> list[ForecastEntry]:
+    result = []
+    seen: set[str] = set()
+    for date_str, table in sorted(tables.items()):
+        try:
+            base = date.fromisoformat(date_str)
+        except ValueError:
+            continue
+        for entry in _parse_hourly_table(table, base):
+            # Pages overlap into the next day (e.g. today's page ends 02:00
+            # tomorrow); keep the first occurrence of each timestamp.
+            if entry.forecast_time not in seen:
+                seen.add(entry.forecast_time)
+                result.append(entry)
+    return result
+
+
+def _parse_hourly_table(table, base: date) -> list[ForecastEntry]:
+    """Parse one vhs-detail-diagram table into hourly entries.
+
+    The table holds one column per hour. Hour labels (HH:MM) appear in every
+    third cell of the time row; the first label anchors the column → hour
+    mapping, columns past 24:00 roll over into the next day.
+    """
+    rows = table.find_all('tr')
+
+    hours: list[int] | None = None
+    columns: dict[str, list] = {}
+    header = ''
+    rows_for_header: dict[str, list] = {}
+
+    for row in rows:
+        cells = row.find_all('td')
+        if len(cells) == 1:
+            header = cells[0].get_text(strip=True)
+            continue
+        if len(cells) < 2:
+            continue
+
+        if hours is None:
+            anchor = None
+            for i, td in enumerate(cells):
+                m = re.search(r'(\d{1,2}):00', td.get_text(strip=True))
+                if m:
+                    anchor = (i, int(m.group(1)) or 24)  # page labels midnight as 00:00 = end of day
+                    break
+            if anchor is not None and not header:
+                idx, hour = anchor
+                hours = [hour - idx + j for j in range(len(cells))]
+            continue
+
+        rows_for_header.setdefault(header, []).append(cells)
+
+    if hours is None:
+        return []
+
+    for key, cells_list in rows_for_header.items():
+        if 'Temperatur' in key:
+            columns['temperature'] = [_int(td) for td in cells_list[0]]
+        elif 'Niederschlagsrisiko' in key:
+            columns['precip_probability'] = [_int(td) for td in cells_list[0]]
+        elif 'Niederschlagsmenge' in key:
+            columns['precip_amount'] = [_float(td) for td in cells_list[0]]
+        elif 'Windrichtung' in key and len(cells_list) >= 2:
+            columns['wind_direction'] = [(_clean(td.get_text()) or None) for td in cells_list[0]]
+            columns['wind_speed'] = [_int(td) for td in cells_list[1]]
+        elif 'Luftdruck' in key:
+            columns['pressure'] = [_float(td) for td in cells_list[0]]
+        elif 'Feucht' in key:
+            columns['humidity'] = [_int(td) for td in cells_list[0]]
+        elif 'Bew' in key and 'lkung' in key:
+            columns['cloud_cover'] = [_cell_octant(td) for td in cells_list[0]]
+        elif 'Wetterzustand' in key:
+            conds, icons = [], []
+            for td in cells_list[0]:
+                img = td.find('img')
+                conds.append((img.get('title') or img.get('alt')) if img else None)
+                icons.append(img.get('data-single-src') or img.get('src') if img else None)
+            columns['condition_text'] = conds
+            columns['icon_url'] = icons
+
+    def col(name: str, j: int):
+        vals = columns.get(name)
+        return vals[j] if vals and j < len(vals) else None
+
+    result = []
+    for j, hour in enumerate(hours):
+        day = base + timedelta(days=hour // 24)
+        entry = ForecastEntry(
+            forecast_time=f'{day}T{hour % 24:02d}:00:00',
+            granularity='hourly',
+            condition_text=col('condition_text', j),
+            icon_url=col('icon_url', j),
+            temperature=col('temperature', j),
+            precip_probability=col('precip_probability', j),
+            precip_amount=col('precip_amount', j),
+            wind_direction=col('wind_direction', j),
+            wind_speed=col('wind_speed', j),
+            pressure=col('pressure', j),
+            humidity=col('humidity', j),
+            cloud_cover=col('cloud_cover', j),
+        )
+        if entry.temperature is not None or entry.precip_probability is not None:
+            result.append(entry)
+    return result
+
+
+def _cell_octant(td) -> Optional[int]:
+    m = re.search(r'(\d+)/8', td.get_text(strip=True))
+    return round(int(m.group(1)) * 100 / 8) if m else None
 
 
 def _parse_detail_extras(table) -> dict:

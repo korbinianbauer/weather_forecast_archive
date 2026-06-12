@@ -345,25 +345,36 @@ def location_plot(location_id):
 
     sources = db.get_location_sources(location_id)
     provider_labels = {p.name: p.display_name for p in providers.all_providers()}
-    available_dates = db.get_available_forecast_dates(location_id)
+    mode = 'hourly' if request.args.get('mode') == 'hourly' else 'daily'
+    available_dates = db.get_available_forecast_dates(
+        location_id, granularity='hourly' if mode == 'hourly' else None)
     all_provider_names = [s['provider'] for s in sources]
 
-    target_date = request.args.get('date', available_dates[0] if available_dates else '')
+    target_date = request.args.get('date', '')
+    if target_date not in available_dates:
+        target_date = available_dates[0] if available_dates else ''
     url_providers = request.args.getlist('providers')
     default_provider = url_providers[0] if len(url_providers) == 1 else None
 
-    rows = db.get_forecast_evolution(location_id, target_date, all_provider_names) if target_date else []
-    traces_json = json.dumps(_build_evolution_traces(rows, provider_labels))
+    if not target_date:
+        traces = []
+    elif mode == 'hourly':
+        rows = db.get_hourly_runs(location_id, target_date, all_provider_names)
+        traces = _build_hourly_traces(rows, provider_labels)
+    else:
+        rows = db.get_forecast_evolution(location_id, target_date, all_provider_names)
+        traces = _build_evolution_traces(rows, provider_labels)
 
     return render_template(
         'plot.html',
         location=location,
+        mode=mode,
         available_dates=available_dates,
         target_date=target_date,
         all_providers=all_provider_names,
         provider_labels=provider_labels,
         default_provider=default_provider,
-        traces_json=traces_json,
+        traces_json=json.dumps(traces),
     )
 
 
@@ -482,6 +493,54 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
     return all_traces
 
 
+def _build_hourly_traces(rows: list[dict], provider_labels: dict) -> list[dict]:
+    """One line per archived poll, showing the hourly forecast curve for the
+    target date; older polls are drawn progressively more transparent."""
+    if not rows:
+        return []
+
+    by_provider: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+    for row in rows:
+        by_provider[row['provider']][row['fetched_at']].append(row)
+
+    metrics = [
+        ('temperature',        'temperature'),
+        ('precip_probability', 'precipitation_precip_probability'),
+        ('precip_amount',      'precipitation_precip_amount'),
+        ('wind_speed',         'wind_wind_speed'),
+        ('cloud_cover',        'cloud_cloud_cover'),
+        ('pressure',           'pressure_pressure'),
+        ('humidity',           'humidity_humidity'),
+    ]
+
+    traces = []
+    for provider in sorted(by_provider):
+        label = provider_labels.get(provider, provider)
+        polls = sorted(by_provider[provider])
+        n = len(polls)
+        for i, fetched_at in enumerate(polls):
+            entries = sorted(by_provider[provider][fetched_at],
+                             key=lambda e: e['forecast_time'])
+            newest = i == n - 1
+            alpha = 1.0 if newest else 0.15 + 0.55 * (i + 1) / n
+            color = _provider_rgba(provider, alpha)
+            xs = [e['forecast_time'] for e in entries]
+            name = f"{label} · {fetched_at[:16].replace('T', ' ')}"
+            for field, metric_key in metrics:
+                ys = [e.get(field) for e in entries]
+                if not any(v is not None for v in ys):
+                    continue
+                traces.append({
+                    'x': xs, 'y': ys,
+                    'type': 'scatter', 'mode': 'lines+markers',
+                    'name': name, 'showlegend': newest,
+                    'line': {'color': color, 'width': 2 if newest else 1.5},
+                    'marker': {'size': 5 if newest else 3, 'color': color},
+                    'metric': metric_key, 'legendgroup': label,
+                })
+    return traces
+
+
 @app.route('/api/location/<int:location_id>/evolution')
 def api_evolution(location_id):
     location = db.get_location(location_id)
@@ -495,11 +554,17 @@ def api_evolution(location_id):
     provider_labels_map = {p.name: p.display_name for p in providers.all_providers()}
     url_providers = request.args.getlist('providers')
     default_provider = url_providers[0] if len(url_providers) == 1 else None
-    rows = db.get_forecast_evolution(location_id, target_date, all_provider_names)
-    traces = _build_evolution_traces(rows, provider_labels_map)
+    mode = 'hourly' if request.args.get('mode') == 'hourly' else 'daily'
+    if mode == 'hourly':
+        rows = db.get_hourly_runs(location_id, target_date, all_provider_names)
+        traces = _build_hourly_traces(rows, provider_labels_map)
+    else:
+        rows = db.get_forecast_evolution(location_id, target_date, all_provider_names)
+        traces = _build_evolution_traces(rows, provider_labels_map)
     return jsonify({
         'traces': traces,
         'target_date': target_date,
+        'mode': mode,
         'provider_labels': provider_labels_map,
         'default_provider': default_provider,
     })
