@@ -495,12 +495,14 @@ def get_hourly_runs(
         return [dict(r) for r in rows]
 
 
-def already_polled_today(location_id: int, provider: str) -> bool:
+def recently_polled(location_id: int, provider: str, max_age_minutes: int = 50) -> bool:
+    """Debounce so a poller restart near a scheduled fire doesn't double-poll;
+    unlike a per-day check this never suppresses a multi-times-per-day cron."""
     with get_db() as conn:
         count = conn.execute(
-            '''SELECT COUNT(*) FROM forecast_snapshots
-               WHERE location_id = ? AND provider = ?
-               AND fetched_at >= strftime('%Y-%m-%d', 'now')''',
+            f'''SELECT COUNT(*) FROM forecast_snapshots
+                WHERE location_id = ? AND provider = ?
+                AND fetched_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-{int(max_age_minutes)} minutes')''',
             (location_id, provider),
         ).fetchone()[0]
         return count > 0
