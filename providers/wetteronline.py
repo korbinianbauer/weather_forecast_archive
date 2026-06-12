@@ -4,6 +4,7 @@ import logging
 import re
 from datetime import date, datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -20,6 +21,10 @@ _HEADERS = {
 }
 
 _CARDINAL = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+
+# wetteronline.de serves all times in German local time; anchor the hourcast
+# day inference to that zone, not the server clock (which may run UTC).
+_SITE_TZ = ZoneInfo('Europe/Berlin')
 
 
 class WetterOnlineProvider(WeatherProvider):
@@ -217,7 +222,7 @@ def _parse_hourcast(html: str, now: Optional[datetime] = None) -> list[ForecastE
         return []
 
     icon_base = _icon_base(html)
-    now = now or datetime.now()
+    now = now or datetime.now(_SITE_TZ)
 
     result = []
     day = None

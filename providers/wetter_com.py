@@ -184,11 +184,11 @@ def _fetch_detail_tables(seo: str, loc_id: str) -> dict[str, 'BeautifulSoup']:
 
 def _apply_detail_extras(entries: list[ForecastEntry], tables: dict) -> None:
     """Fill daily cloud_cover / humidity / pressure means from the hourly diagram tables."""
+    extras = {date_str: _parse_detail_extras(table) for date_str, table in tables.items()}
     for entry in entries:
-        table = tables.get(entry.forecast_time[:10])
-        if table is None:
+        d = extras.get(entry.forecast_time[:10])
+        if d is None:
             continue
-        d = _parse_detail_extras(table)
         entry.cloud_cover = d.get('cloud_cover')
         entry.humidity = d.get('humidity')
         entry.pressure = d.get('pressure')

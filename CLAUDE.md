@@ -19,7 +19,7 @@ Auth credentials are read from env vars `BETHER_USER` (default: `admin`) and `BE
 1. `app.py` runs an APScheduler cron job at 06:00 UTC calling `poll_all_due()`.
 2. For each location + provider pair, the appropriate `WeatherProvider` subclass scrapes the provider site and returns a list of `ForecastEntry` objects.
 3. `db.save_forecast_batch()` stores each entry as a row in `forecast_snapshots` tagged with `fetched_at` (poll timestamp) and `forecast_time` (the date/time being forecasted).
-4. The plot page (`/location/<id>/plot`) has two modes: the default daily mode calls `db.get_forecast_evolution()` (one row per archived poll for a chosen target date) and `_build_evolution_traces()`; `?mode=hourly` calls `db.get_hourly_runs()` and `_build_hourly_traces()`, which draws one hourly forecast curve per archived poll with older polls progressively more transparent.
+4. Clicking a day cell on the index page opens the inline evolution view, which fetches `/api/location/<id>/evolution?date=…&mode=daily|hourly`: daily mode calls `db.get_forecast_evolution()` (one row per archived poll for the target date) and `_build_evolution_traces()`; hourly mode calls `db.get_hourly_runs()` and `_build_hourly_traces()`, which draws one hourly forecast curve per archived poll with older polls progressively more transparent.
 
 ### Key files
 
@@ -47,8 +47,8 @@ Auth credentials are read from env vars `BETHER_USER` (default: `admin`) and `BE
 2. Set `name` (DB slug), `display_name`, `supports_daily`/`supports_hourly`.
 3. Implement `search()` → `list[LocationResult]` and `fetch_daily()` / `fetch_hourly()` → `list[ForecastEntry]`. If both granularities come from the same pages, override `fetch_all()` so the poller fetches them in one pass (see wetter_com / meteoblue).
 4. Instantiate and append to `_all` in `providers/__init__.py`.
-5. Add a color entry in `_PROVIDER_COLORS` in `app.py` if desired.
+5. Add a default color in `_load_provider_colors()` in `app.py` and `_init_default_settings()` in `db.py` if desired.
 
 ### Auth
 
-Single-user session auth via Flask `session`. The `@login_required` decorator guards all write routes (`/add`, `/refresh`, `/delete`, `/add_source`). Read routes (index, plot, db browser, search) are public.
+Single-user session auth via Flask `session`. The `@login_required` decorator guards all write routes (`/add`, `/refresh`, `/delete`, `/add_source`) and the settings page (which includes the DB browser tab). Read routes (index, evolution API, search) are public.
