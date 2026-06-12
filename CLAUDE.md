@@ -16,7 +16,7 @@ Auth credentials are read from env vars `BETHER_USER` (default: `admin`) and `BE
 
 ### Data flow
 
-1. `app.py` runs an APScheduler cron job at 06:00 UTC calling `poll_all_due()`.
+1. `poll.py` (a standalone process, auto-started by `app.py`) runs an APScheduler cron job — schedule from the `poll_cron` setting (editable in Settings, reloaded via SIGHUP) — that calls `poll_all_due()` in a fresh subprocess so each run uses the latest code. A 50-minute debounce (`db.recently_polled`) prevents double-polls around restarts.
 2. For each location + provider pair, the appropriate `WeatherProvider` subclass scrapes the provider site and returns a list of `ForecastEntry` objects.
 3. `db.save_forecast_batch()` stores each entry as a row in `forecast_snapshots` tagged with `fetched_at` (poll timestamp) and `forecast_time` (the date/time being forecasted).
 4. Clicking a day cell on the index page opens the inline evolution view, which fetches `/api/location/<id>/evolution?date=…&mode=daily|hourly`: daily mode calls `db.get_forecast_evolution()` (one row per archived poll for the target date) and `_build_evolution_traces()`; hourly mode calls `db.get_hourly_runs()` and `_build_hourly_traces()`, which draws one hourly forecast curve per archived poll with older polls progressively more transparent.

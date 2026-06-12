@@ -30,7 +30,7 @@ def poll_all_due():
         for source in db.get_location_sources(loc['id']):
             if not source.get('enabled', 1):
                 continue
-            if not db.already_polled_today(loc['id'], source['provider']):
+            if not db.recently_polled(loc['id'], source['provider']):
                 try:
                     _poll_source(loc['id'], source)
                 except Exception as e:
