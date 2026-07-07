@@ -185,8 +185,14 @@ def _load_provider_colors() -> dict[str, str]:
         colors = json.loads(db.get_setting('provider_colors', '{}'))
     except json.JSONDecodeError:
         colors = {}
-    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'median': '#111827'}
+    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'median': '#111827', 'dwd': '#dc2626'}
     return {**defaults, **colors}
+
+
+# Providers delivering measured ground truth instead of forecasts (e.g. DWD).
+# They are excluded from the forecast median and drawn specially in the plots.
+_OBSERVATION_PROVIDERS = {p.name for p in providers.all_providers()
+                          if getattr(p, 'is_observation', False)}
 
 
 @app.context_processor
@@ -274,7 +280,11 @@ def index():
 
         available_providers = [p for p in providers.all_providers()
                                if p.name not in configured_providers]
-        first_provider = sources[0]['provider'] if sources else None
+        # Overview card: prefer a forecast provider — observation data (DWD)
+        # lags too far behind to represent "now".
+        first_provider = next(
+            (s['provider'] for s in sources if s['provider'] not in _OBSERVATION_PROVIDERS),
+            sources[0]['provider'] if sources else None)
         location_data.append({
             'location': loc,
             'all_dates': window_dates,
@@ -316,6 +326,38 @@ def search():
             'extra': r.extra,
         }
         for r in results[:8]
+    ])
+
+
+@app.route('/dwd_stations')
+def dwd_stations():
+    """Nearest DWD stations (with distance) for the add-location dialog."""
+    try:
+        lat = float(request.args['lat'])
+        lon = float(request.args['lon'])
+    except (KeyError, TypeError, ValueError):
+        return jsonify([])
+    try:
+        stations = providers.get('dwd').nearest_stations(lat, lon, limit=5)
+    except Exception as e:
+        logger.error('DWD station lookup failed: %s', e)
+        return jsonify([])
+    return jsonify([
+        {
+            'name': s['name'],
+            'provider_location_id': s['id'],
+            'latitude': s['latitude'],
+            'longitude': s['longitude'],
+            'distance_km': s['distance_km'],
+            'extra': {
+                'title': f"{s['name']} ({s['state']}) · {s['distance_km']:.1f} km",
+                'station_name': s['name'],
+                'state': s['state'],
+                'height': s['height'],
+                'distance_km': s['distance_km'],
+            },
+        }
+        for s in stations
     ])
 
 
@@ -388,6 +430,7 @@ def _median_evolution_rows(rows: list[dict]) -> list[dict]:
     Providers within one poll run are fetched minutes apart, so rows are
     clustered by fetched_at (≤30 min chain gap); each cluster with ≥2
     providers yields one median row."""
+    rows = [r for r in rows if r['provider'] not in _OBSERVATION_PROVIDERS]
     if len({r['provider'] for r in rows}) < 2:
         return []
 
@@ -428,10 +471,23 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
 
     provider_colors = _load_provider_colors()
 
+    # Observations are archived once per forecast_time, so they would show as
+    # a lone point — stretch the measured value into a horizontal reference
+    # line across the full poll range instead.
+    x_min = min(r['fetched_at'] for r in rows)
+    x_max = max(r['fetched_at'] for r in rows)
+    obs_labels: set[str] = set()
+
     all_traces = []
     legend_shown: set[str] = set()
 
     for (provider, granularity), entries in sorted(groups.items()):
+        if provider in _OBSERVATION_PROVIDERS:
+            obs_labels.add(provider_labels.get(provider, provider))
+            if x_max > x_min:
+                last = entries[-1]
+                entries = [{**last, 'fetched_at': x_min},
+                           {**last, 'fetched_at': x_max}]
         hex_color  = provider_colors.get(provider, _DEFAULT_COLOR_HEX)
         color      = _rgba(hex_color, 1.0)
         fill_color = _rgba(hex_color, 0.15)
@@ -521,6 +577,10 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
                 'metric': metric_key, 'legendgroup': label,
             })
 
+    for t in all_traces:
+        if t.get('legendgroup') in obs_labels and t.get('line', {}).get('width'):
+            t['line']['dash'] = 'dot'
+
     return all_traces
 
 
@@ -534,10 +594,22 @@ def _build_hourly_traces(rows: list[dict], provider_labels: dict) -> list[dict]:
     for row in rows:
         by_provider[row['provider']][row['fetched_at']].append(row)
 
-    # Median pseudo-provider: one curve over the newest run of each provider,
-    # at forecast times where ≥2 providers have a value.
-    if len(by_provider) >= 2:
-        newest_runs = {p: max(runs) for p, runs in by_provider.items()}
+    # Observation hours are archived incrementally (each hour once, at the
+    # first poll that saw it) — merge them into a single ground-truth curve.
+    for p in _OBSERVATION_PROVIDERS & set(by_provider):
+        if len(by_provider[p]) > 1:
+            merged: dict[str, dict] = {}
+            for fetched_at in sorted(by_provider[p]):
+                for e in by_provider[p][fetched_at]:
+                    merged[e['forecast_time']] = e
+            by_provider[p] = {max(by_provider[p]): [merged[t] for t in sorted(merged)]}
+
+    # Median pseudo-provider: one curve over the newest run of each forecast
+    # provider, at forecast times where ≥2 providers have a value.
+    forecast_providers = set(by_provider) - _OBSERVATION_PROVIDERS
+    if len(forecast_providers) >= 2:
+        newest_runs = {p: max(runs) for p, runs in by_provider.items()
+                       if p in forecast_providers}
         by_time: dict[str, list] = defaultdict(list)
         for p, fetched_at in newest_runs.items():
             for e in by_provider[p][fetched_at]:
@@ -571,11 +643,14 @@ def _build_hourly_traces(rows: list[dict], provider_labels: dict) -> list[dict]:
                 ys = [e.get(field) for e in entries]
                 if not any(v is not None for v in ys):
                     continue
+                line = {'color': color, 'width': 2 if newest else 1.5}
+                if provider in _OBSERVATION_PROVIDERS:
+                    line['dash'] = 'dot'
                 traces.append({
                     'x': xs, 'y': ys,
                     'type': 'scatter', 'mode': 'lines+markers',
                     'name': name, 'showlegend': newest,
-                    'line': {'color': color, 'width': 2 if newest else 1.5},
+                    'line': line,
                     'marker': {'size': 5 if newest else 3, 'color': color},
                     'metric': metric_key, 'legendgroup': label,
                 })

@@ -292,7 +292,7 @@
       <input type="text" id="locationName" class="search-input"
              placeholder="e.g. Berlin" autocomplete="off" oninput="updateSubmitBtn()">
     </div>
-    {% for p in all_providers %}
+    {% for p in all_providers if p.name != 'dwd' %}
     <div class="provider-section" style="border:1px solid var(--border); border-radius:8px; padding:.85rem; margin-bottom:.75rem;">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:.6rem;">
         <span style="font-size:.8rem; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.05em;">
@@ -315,6 +315,25 @@
       </div>
     </div>
     {% endfor %}
+    <div class="provider-section" style="border:1px solid var(--border); border-radius:8px; padding:.85rem; margin-bottom:.75rem;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:.6rem;">
+        <span style="font-size:.8rem; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.05em;">
+          DWD Station (Ground Truth)
+        </span>
+        <span class="badge" id="badge-dwd" style="display:none; background:#dcfce7; color:#166534;">✓ selected</span>
+      </div>
+      <div id="dwd-hint" style="font-size:.8rem; color:var(--muted);">
+        Select a provider location above — the nearest DWD weather stations will appear here.
+      </div>
+      <div class="search-results" id="dwd-stations" style="font-size:.85rem;"></div>
+      <div id="selected-dwd" style="display:none; margin-top:.6rem; padding:.5rem .75rem;
+           background:#f0f7ff; border-radius:6px; font-size:.85rem; border:1px solid #bfdbfe;
+           align-items:center; justify-content:space-between;">
+        <strong id="selected-label-dwd"></strong>
+        <button type="button" onclick="clearProvider('dwd')"
+                style="background:none; border:none; cursor:pointer; color:var(--muted); font-size:1rem; line-height:1;">×</button>
+      </div>
+    </div>
     <form method="post" action="{{ url_for('add_location') }}" id="addForm" onsubmit="injectFormFields()">
       <input type="hidden" name="_csrf"     value="{{ csrf_token() }}">
       <input type="hidden" name="name"      id="f_name">
@@ -348,10 +367,14 @@ function openModal() {
 function closeModal() {
   document.getElementById('modal').classList.remove('open');
   document.getElementById('locationName').value = '';
-  {% for p in all_providers %}
+  {% for p in all_providers if p.name != 'dwd' %}
   clearProvider('{{ p.name }}');
   document.getElementById('search-{{ p.name }}').value = '';
   {% endfor %}
+  clearProvider('dwd');
+  resetDwdStations();
+  document.getElementById('f_lat').value = '';
+  document.getElementById('f_lon').value = '';
   updateSubmitBtn();
 }
 document.getElementById('modal').addEventListener('click', e => {
@@ -390,22 +413,93 @@ function fetchResults(provider, q) {
 function selectItem(provider, item) {
   providerSelections[provider] = item;
   const nameInput = document.getElementById('locationName');
-  if (!nameInput.value.trim()) nameInput.value = item.name;
+  if (provider !== 'dwd' && !nameInput.value.trim()) nameInput.value = item.name;
   document.getElementById('selected-label-' + provider).textContent = item.extra.title || item.name;
   document.getElementById('selected-' + provider).style.display = 'flex';
   document.getElementById('badge-' + provider).style.display = '';
-  document.getElementById('results-' + provider).classList.remove('visible');
-  document.getElementById('search-' + provider).value = '';
-  if (!document.getElementById('f_lat').value) {
-    document.getElementById('f_lat').value = item.latitude || 0;
-    document.getElementById('f_lon').value = item.longitude || 0;
-  }
+  const resultsEl = document.getElementById('results-' + provider);
+  if (resultsEl) resultsEl.classList.remove('visible');
+  const searchEl = document.getElementById('search-' + provider);
+  if (searchEl) searchEl.value = '';
+  refreshCoords();
   updateSubmitBtn();
+}
+
+// Location coordinates follow the current provider selections (first forecast
+// provider with coords, DWD station as fallback). Changing the selection moves
+// the coordinates and reloads the DWD station suggestions.
+function refreshCoords() {
+  const candidates = Object.entries(providerSelections)
+    .filter(([p]) => p !== 'dwd').map(([, it]) => it);
+  if (providerSelections['dwd']) candidates.push(providerSelections['dwd']);
+  const it = candidates.find(it => it.latitude);
+  const latEl = document.getElementById('f_lat');
+  const lonEl = document.getElementById('f_lon');
+  const newLat = it ? String(it.latitude) : '';
+  const newLon = it ? String(it.longitude) : '';
+  if (latEl.value === newLat && lonEl.value === newLon) return;
+  latEl.value = newLat;
+  lonEl.value = newLon;
+  if (providerSelections['dwd'] && it !== providerSelections['dwd']) {
+    clearProvider('dwd');  // suggestions basis changed
+  }
+  if (newLat) loadDwdStations(); else resetDwdStations();
+}
+
+// ── DWD ground-truth stations ──────────────────────────────────────────────
+let dwdLoadedFor = '';
+
+function resetDwdStations() {
+  dwdLoadedFor = '';
+  const box = document.getElementById('dwd-stations');
+  box.replaceChildren();
+  box.classList.remove('visible');
+  document.getElementById('dwd-hint').textContent =
+    'Select a provider location above — the nearest DWD weather stations will appear here.';
+}
+
+function loadDwdStations() {
+  const lat = document.getElementById('f_lat').value;
+  const lon = document.getElementById('f_lon').value;
+  if (!lat || !lon) return;
+  const key = lat + ',' + lon;
+  if (dwdLoadedFor === key) return;
+  dwdLoadedFor = key;
+  const hint = document.getElementById('dwd-hint');
+  hint.textContent = 'Looking up nearest DWD stations…';
+  fetch('/dwd_stations?lat=' + encodeURIComponent(lat) + '&lon=' + encodeURIComponent(lon))
+    .then(r => r.json())
+    .then(data => {
+      const box = document.getElementById('dwd-stations');
+      box.replaceChildren();
+      if (!data.length) {
+        box.classList.remove('visible');
+        hint.textContent = 'No DWD stations found for these coordinates.';
+        return;
+      }
+      hint.textContent = 'Nearest DWD stations — pick one to track as ground truth:';
+      data.forEach(item => {
+        const div = document.createElement('div');
+        div.className = 'search-result-item';
+        const name = document.createElement('div');
+        name.className = 'city-name';
+        name.textContent = `${item.name} · ${item.distance_km.toFixed(1)} km`;
+        const meta = document.createElement('div');
+        meta.className = 'city-meta';
+        meta.textContent = 'Station ' + item.provider_location_id + ' · ' + item.extra.state;
+        div.append(name, meta);
+        div.addEventListener('click', () => selectItem('dwd', item));
+        box.appendChild(div);
+      });
+      box.classList.add('visible');
+    })
+    .catch(() => { hint.textContent = 'DWD station lookup failed.'; });
 }
 function clearProvider(provider) {
   delete providerSelections[provider];
   document.getElementById('selected-' + provider).style.display = 'none';
   document.getElementById('badge-' + provider).style.display = 'none';
+  refreshCoords();
   updateSubmitBtn();
 }
 function updateSubmitBtn() {

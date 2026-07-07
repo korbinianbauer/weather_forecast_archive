@@ -14,15 +14,28 @@ def _poll_source(location_id: int, source: dict):
     fetched_at = datetime.utcnow().isoformat()
 
     entries = provider.fetch_all(plid, meta)
-    if entries:
-        db.save_forecast_batch(location_id, provider.name, fetched_at, entries)
-        by_gran: dict[str, int] = {}
-        for e in entries:
-            by_gran[e.granularity] = by_gran.get(e.granularity, 0) + 1
-        logger.info('Polled location %d via %s: %s entries', location_id, provider.name,
-                    ', '.join(f'{n} {g}' for g, n in sorted(by_gran.items())))
-    else:
+    if not entries:
         logger.warning('No data returned for location %d via %s', location_id, provider.name)
+        return
+
+    if getattr(provider, 'is_observation', False):
+        # Observations are immutable: only archive forecast_times not stored yet.
+        existing = db.get_existing_forecast_times(location_id, provider.name)
+        skipped = len(entries)
+        entries = [e for e in entries if (e.granularity, e.forecast_time) not in existing]
+        skipped -= len(entries)
+        if skipped:
+            logger.info('Location %d via %s: %d entries already archived',
+                        location_id, provider.name, skipped)
+        if not entries:
+            return
+
+    db.save_forecast_batch(location_id, provider.name, fetched_at, entries)
+    by_gran: dict[str, int] = {}
+    for e in entries:
+        by_gran[e.granularity] = by_gran.get(e.granularity, 0) + 1
+    logger.info('Polled location %d via %s: %s entries', location_id, provider.name,
+                ', '.join(f'{n} {g}' for g, n in sorted(by_gran.items())))
 
 
 def poll_all_due():
