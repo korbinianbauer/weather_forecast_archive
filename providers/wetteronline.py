@@ -185,7 +185,7 @@ def _parse_day(d: dict, ref: date, icon_base: str = '') -> Optional[ForecastEntr
         precip_probability=_int(d.get('precipitationProbability')),
         precip_amount=_float(d.get('precipitationAmount24')),
         wind_direction=wind_dir,
-        wind_speed=_int(d.get('windGustKmh')),
+        wind_speed=_wind_force_to_kmh(d.get('windForce')),
         sunshine_hours=_float(d.get('absoluteSunshineDuration')),
     )
 
@@ -335,7 +335,7 @@ def _parse_medium_term(html: str) -> list[ForecastEntry]:
                 precip_probability=_int(precip.get('probability')),
                 precip_amount=_amount(precip.get('amount')),
                 wind_direction=wind_dir,
-                wind_speed=_int(wind.get('maxGustKmh')),
+                wind_speed=_wind_force_to_kmh(wind.get('force')),
             ))
     return result
 
@@ -353,6 +353,30 @@ def _amount(val) -> Optional[float]:
 
 
 # ── value parsers ─────────────────────────────────────────────────────────────
+
+def _parse_bft(val) -> Optional[float]:
+    """Parse a Beaufort force value – may be a range like '3-4' → midpoint."""
+    if val is None:
+        return None
+    try:
+        s = str(val).strip()
+        m = re.match(r'(\d+(?:[.,]\d+)?)\s*-\s*(\d+(?:[.,]\d+)?)', s)
+        if m:
+            return (float(m.group(1).replace(',', '.'))
+                    + float(m.group(2).replace(',', '.'))) / 2.0
+        return float(s.replace(',', '.'))
+    except (ValueError, TypeError):
+        return None
+
+
+def _wind_force_to_kmh(val) -> Optional[int]:
+    """Convert WetterOnline Beaufort wind force to km/h (sustained)."""
+    bft = _parse_bft(val)
+    if bft is None:
+        return None
+    # v (km/h) = 3.6 × 0.836 × bft^(3/2)   — WMO formula
+    return round(3.01 * (bft ** 1.5))
+
 
 def _int(val) -> Optional[int]:
     if val is None:
