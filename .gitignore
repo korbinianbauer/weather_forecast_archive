@@ -11,3 +11,4 @@ venv/
 dist/
 build/
 deploy.sh
+reload.sh
