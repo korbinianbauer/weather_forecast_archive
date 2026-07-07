@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import secrets
+import statistics
 import subprocess
 import sys
 import threading
@@ -184,7 +185,7 @@ def _load_provider_colors() -> dict[str, str]:
         colors = json.loads(db.get_setting('provider_colors', '{}'))
     except json.JSONDecodeError:
         colors = {}
-    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e'}
+    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'median': '#111827'}
     return {**defaults, **colors}
 
 
@@ -368,6 +369,52 @@ _SIMPLE_METRICS = [
     ('humidity',           'humidity_humidity'),
 ]
 
+_MEDIAN_FIELDS = ['temperature', 'temp_max', 'temp_min'] + [f for f, _ in _SIMPLE_METRICS]
+
+
+def _median_entry(entries: list[dict]) -> dict:
+    """Field-wise median over one entry per provider; only fields with ≥2 values."""
+    out = {}
+    for field in _MEDIAN_FIELDS:
+        vals = [e.get(field) for e in entries if e.get(field) is not None]
+        if len(vals) >= 2:
+            out[field] = round(statistics.median(vals), 1)
+    return out
+
+
+def _median_evolution_rows(rows: list[dict]) -> list[dict]:
+    """Synthesize 'median' pseudo-provider rows for the daily evolution plot.
+
+    Providers within one poll run are fetched minutes apart, so rows are
+    clustered by fetched_at (≤30 min chain gap); each cluster with ≥2
+    providers yields one median row."""
+    if len({r['provider'] for r in rows}) < 2:
+        return []
+
+    clusters: list[list[dict]] = []
+    prev_ts = None
+    for r in sorted(rows, key=lambda r: r['fetched_at']):
+        ts = datetime.fromisoformat(r['fetched_at'])
+        if prev_ts is None or (ts - prev_ts).total_seconds() > 1800:
+            clusters.append([])
+        clusters[-1].append(r)
+        prev_ts = ts
+
+    result = []
+    for cluster in clusters:
+        latest_per_provider = {r['provider']: r for r in cluster}  # sorted → last wins
+        if len(latest_per_provider) < 2:
+            continue
+        med = _median_entry(list(latest_per_provider.values()))
+        if med:
+            result.append({
+                'provider': 'median',
+                'granularity': 'daily',
+                'fetched_at': max(r['fetched_at'] for r in latest_per_provider.values()),
+                **med,
+            })
+    return result
+
 
 def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dict]:
     if not rows:
@@ -487,6 +534,22 @@ def _build_hourly_traces(rows: list[dict], provider_labels: dict) -> list[dict]:
     for row in rows:
         by_provider[row['provider']][row['fetched_at']].append(row)
 
+    # Median pseudo-provider: one curve over the newest run of each provider,
+    # at forecast times where ≥2 providers have a value.
+    if len(by_provider) >= 2:
+        newest_runs = {p: max(runs) for p, runs in by_provider.items()}
+        by_time: dict[str, list] = defaultdict(list)
+        for p, fetched_at in newest_runs.items():
+            for e in by_provider[p][fetched_at]:
+                by_time[e['forecast_time']].append(e)
+        med_entries = []
+        for t in sorted(by_time):
+            med = _median_entry(by_time[t])
+            if med:
+                med_entries.append({'forecast_time': t, **med})
+        if med_entries:
+            by_provider['median'][max(newest_runs.values())] = med_entries
+
     provider_colors = _load_provider_colors()
     metrics = [('temperature', 'temperature')] + _SIMPLE_METRICS
 
@@ -530,6 +593,7 @@ def api_evolution(location_id):
     sources = db.get_location_sources(location_id)
     all_provider_names = [s['provider'] for s in sources]
     provider_labels_map = {p.name: p.display_name for p in providers.all_providers()}
+    provider_labels_map['median'] = 'Median'
     url_providers = request.args.getlist('providers')
     default_provider = url_providers[0] if len(url_providers) == 1 else None
     mode = 'hourly' if request.args.get('mode') == 'hourly' else 'daily'
@@ -538,7 +602,12 @@ def api_evolution(location_id):
         traces = _build_hourly_traces(rows, provider_labels_map)
     else:
         rows = db.get_forecast_evolution(location_id, target_date, all_provider_names)
+        rows = rows + _median_evolution_rows(rows)
         traces = _build_evolution_traces(rows, provider_labels_map)
+    # Draw the median as a dashed line so it stands out as synthetic
+    for t in traces:
+        if t.get('legendgroup') == 'Median' and t.get('line', {}).get('width'):
+            t['line']['dash'] = 'dash'
     return jsonify({
         'traces': traces,
         'target_date': target_date,

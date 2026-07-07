@@ -913,14 +913,43 @@ function buildLegend(rows) {
   return { el, items };
 }
 
+function medianOf(vals) {
+  const v = vals.filter(x => x !== null && x !== undefined).sort((a, b) => a - b);
+  if (v.length < 2) return null;
+  const mid = v.length >> 1;
+  return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+}
+
+const MEDIAN_FIELDS = ['temperature', 'temp_max', 'temp_min', 'sunshine_hours',
+  'precip_probability', 'precip_amount', 'wind_speed', 'cloud_cover', 'pressure', 'humidity'];
+
+// Synthetic 'Median' row: field-wise median across providers, per date,
+// only where ≥2 providers have a value.
+function buildMedianRow(rows, dates) {
+  const byDate = {};
+  for (const d of dates) {
+    const e = {};
+    let any = false;
+    for (const f of MEDIAN_FIELDS) {
+      const m = medianOf(rows.map(r => r.byDate[d]?.[f] ?? null));
+      if (m !== null) { e[f] = Math.round(m * 10) / 10; any = true; }
+    }
+    if (any) byDate[d] = e;
+  }
+  return { provider: 'median', label: 'Median', byDate };
+}
+
 function renderPlot(locId) {
   const loc = window.__loc[locId];
   if (!loc) return;
 
   const container = document.getElementById('plot-charts-' + locId);
   const dates = loc.dates;
+  const rows = loc.rows.length >= 2
+    ? [...loc.rows, buildMedianRow(loc.rows, dates)]
+    : loc.rows;
 
-  const { el: legendEl, items: legendItems } = buildLegend(loc.rows);
+  const { el: legendEl, items: legendItems } = buildLegend(rows);
   container.appendChild(legendEl);
 
   const axDec = buildAxisDecorations(dates[0], dates[dates.length - 1]);
@@ -944,10 +973,13 @@ function renderPlot(locId) {
 
   for (const metric of metrics) {
     const traces = metric.render
-      ? metric.render(loc.rows)
-      : buildSimpleTraces(loc.rows, dates, metric.field);
+      ? metric.render(rows)
+      : buildSimpleTraces(rows, dates, metric.field);
 
     if (!traces.length) continue;
+    traces.forEach(t => {
+      if (t._provider === 'median' && t.line?.width) t.line.dash = 'dash';
+    });
 
     const wrap = document.createElement('div');
     wrap.className = 'plot-chart-wrap';
