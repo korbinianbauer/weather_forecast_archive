@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.db
+*.log
+poll.pid
 .env
 venv/
 .venv/
