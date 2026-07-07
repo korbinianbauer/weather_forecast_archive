@@ -582,10 +582,23 @@ def get_existing_forecast_times(location_id: int, provider: str) -> set[tuple[st
 
 
 def get_imported_dwd_ids() -> set[str]:
-    """Return set of DWD station IDs that are already imported as location sources."""
+    """Return set of all DWD station IDs used by any location source
+    (bulk-imported or manually attached)."""
     with get_db() as conn:
         rows = conn.execute(
             'SELECT DISTINCT provider_location_id FROM location_sources WHERE provider = ?',
+            ('dwd',),
+        ).fetchall()
+        return {r[0] for r in rows}
+
+
+def get_bulk_imported_dwd_ids() -> set[str]:
+    """Return set of DWD station IDs created via the bulk-import UI
+    (marked with imported_dwd in the source metadata)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT provider_location_id FROM location_sources "
+            "WHERE provider = ? AND json_extract(metadata, '$.imported_dwd')",
             ('dwd',),
         ).fetchall()
         return {r[0] for r in rows}

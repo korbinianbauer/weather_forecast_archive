@@ -1072,14 +1072,15 @@ def settings_page():
         configured = {s['provider'] for s in srcs}
         available_providers_by_loc[loc['id']] = [p for p in all_providers_list if p.name not in configured]
 
-    # Separate DWD bulk-imported locations
+    # Separate DWD bulk-imported locations (metadata flag set by /locations/import_dwd);
+    # locations where the user attached a DWD source manually stay in the regular list.
     regular_locations = []
     dwd_locations = []
-    imported_dwd_ids = db.get_imported_dwd_ids()
+    bulk_imported_dwd_ids = db.get_bulk_imported_dwd_ids()
     for loc in all_locations:
         srcs = location_sources.get(loc['id'], [])
         is_dwd_import = any(
-            s['provider'] == 'dwd' and s['provider_location_id'] in imported_dwd_ids
+            s['provider'] == 'dwd' and s['provider_location_id'] in bulk_imported_dwd_ids
             for s in srcs
         )
         if is_dwd_import:
@@ -1087,17 +1088,23 @@ def settings_page():
         else:
             regular_locations.append(loc)
 
-    # Load DWD stations for the import UI
-    dwd_stations = providers.get('dwd').all_stations()
+    # Load DWD stations for the import UI. Any existing DWD source (bulk or manual)
+    # counts as imported so the picker never creates a duplicate location.
     dwd_stations_by_state: list[tuple[str, list[dict]]] = []
-    state_map: dict[str, list[dict]] = {}
-    for s in dwd_stations:
-        state_map.setdefault(s['state'], []).append(s)
-    for state in sorted(state_map, key=lambda st: -len(state_map[st])):
-        stations = state_map[state]
-        for s in stations:
-            s['imported'] = s['id'] in imported_dwd_ids
-        dwd_stations_by_state.append((state, stations))
+    if tab == 'locations':
+        try:
+            dwd_stations = providers.get('dwd').all_stations()
+        except Exception:
+            logger.exception('Could not load DWD station list')
+            dwd_stations = []
+        used_dwd_ids = db.get_imported_dwd_ids()
+        state_map: dict[str, list[dict]] = {}
+        for s in dwd_stations:
+            state_map.setdefault(s['state'], []).append(s)
+        for state in sorted(state_map, key=lambda st: -len(state_map[st])):
+            stations = [dict(s, imported=s['id'] in used_dwd_ids)
+                        for s in state_map[state]]
+            dwd_stations_by_state.append((state, stations))
 
     try:
         stored_colors = json.loads(all_settings.get('provider_colors', '{}'))
@@ -1210,6 +1217,9 @@ def import_dwd_stations():
         flash('An import is already in progress.')
         return redirect(url_for('settings_page', tab='locations'))
 
+    # From here on the lock is held; it is released either by the background
+    # matcher thread (once started) or by the finally below.
+    thread_owns_lock = False
     try:
         all_stations = {s['id']: s for s in providers.get('dwd').all_stations()}
         already = db.get_imported_dwd_ids()
@@ -1245,7 +1255,7 @@ def import_dwd_stations():
                     for pname in ('wetter_com', 'meteoblue', 'wetteronline'):
                         key = (pname, city)
                         if key not in search_cache:
-                            # Rate-limit: 1.5s between searches per provider
+                            # Rate-limit: 1.5s between provider searches
                             if idx > 0 or search_cache:
                                 time.sleep(1.5)
                             try:
@@ -1264,11 +1274,12 @@ def import_dwd_stations():
                 _import_dwd_lock.release()
 
         threading.Thread(target=_match_providers, daemon=True).start()
+        thread_owns_lock = True
 
         flash(f'Added {len(new_locations)} DWD station(s). Matching forecast providers in background…')
-    except Exception:
-        _import_dwd_lock.release()
-        raise
+    finally:
+        if not thread_owns_lock:
+            _import_dwd_lock.release()
 
     return redirect(url_for('settings_page', tab='locations'))
 

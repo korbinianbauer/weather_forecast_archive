@@ -155,6 +155,18 @@
 </nav>
 
 <main style="{% block main_style %}max-width:1200px;{% endblock %} margin:2rem auto; padding:0 1.25rem;">
+  {% with messages = get_flashed_messages() %}
+  {% if messages %}
+  <div class="gap">
+    {% for msg in messages %}
+    <div class="card" style="border-left: 4px solid var(--primary); padding: .7rem 1rem;
+                             font-size: .9rem; margin-bottom: .5rem;">
+      {{ msg }}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% endwith %}
   {% block content %}{% endblock %}
 </main>
 
