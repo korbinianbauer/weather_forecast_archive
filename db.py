@@ -347,6 +347,37 @@ def get_latest_forecast(
         return [dict(r) for r in rows]
 
 
+def get_latest_forecast_per_date(
+    location_id: int,
+    provider: str,
+    date_start: str,
+    date_end: str,
+    granularity: str = 'daily',
+) -> list[dict]:
+    """For each forecast date in [date_start, date_end], the row from the most
+    recent poll that covered that date (past dates keep their last forecast)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            '''SELECT * FROM (
+                   SELECT *, ROW_NUMBER() OVER (
+                       PARTITION BY date(forecast_time)
+                       ORDER BY fetched_at DESC
+                   ) AS rn
+                   FROM forecast_snapshots
+                   WHERE location_id = ? AND provider = ? AND granularity = ?
+                     AND date(forecast_time) BETWEEN ? AND ?
+               ) WHERE rn = 1
+               ORDER BY forecast_time''',
+            (location_id, provider, granularity, date_start, date_end),
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d.pop('rn', None)
+            result.append(d)
+        return result
+
+
 def get_poll_history(
     location_id: int,
     provider: str | None = None,

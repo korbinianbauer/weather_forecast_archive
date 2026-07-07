@@ -219,33 +219,6 @@ def index():
     locs = db.get_locations()
     provider_labels = {p.name: p.display_name for p in providers.all_providers()}
 
-    location_data = []
-    for loc in locs:
-        sources = db.get_location_sources(loc['id'])
-        rows = []
-        all_dates: set[str] = set()
-
-        configured_providers = {s['provider'] for s in sources}
-        for source in sources:
-            entries = db.get_latest_forecast(loc['id'], provider=source['provider'], granularity='daily')
-            by_date = {e['forecast_time'][:10]: e for e in entries}
-            all_dates.update(by_date.keys())
-            rows.append({
-                'provider': source['provider'],
-                'enabled': source.get('enabled', 1),
-                'fetched_at': entries[0]['fetched_at'] if entries else None,
-                'by_date': by_date,
-            })
-
-        available_providers = [p for p in providers.all_providers()
-                               if p.name not in configured_providers]
-        location_data.append({
-            'location': loc,
-            'all_dates': sorted(all_dates),
-            'rows': rows,
-            'available_providers': available_providers,
-        })
-
     default_start = _date.today().isoformat()
     date_start = request.args.get('start', default_start)
 
@@ -259,8 +232,33 @@ def index():
     window_dates = [(start_dt + timedelta(days=i)).isoformat() for i in range(16)]
     date_end = window_dates[-1]
 
-    for item in location_data:
-        item['all_dates'] = window_dates
+    location_data = []
+    for loc in locs:
+        sources = db.get_location_sources(loc['id'])
+        rows = []
+
+        configured_providers = {s['provider'] for s in sources}
+        for source in sources:
+            # Per date, the most recent archived forecast — so past days keep
+            # showing the last forecast that covered them.
+            entries = db.get_latest_forecast_per_date(
+                loc['id'], source['provider'], window_dates[0], date_end)
+            by_date = {e['forecast_time'][:10]: e for e in entries}
+            rows.append({
+                'provider': source['provider'],
+                'enabled': source.get('enabled', 1),
+                'fetched_at': max((e['fetched_at'] for e in entries), default=None),
+                'by_date': by_date,
+            })
+
+        available_providers = [p for p in providers.all_providers()
+                               if p.name not in configured_providers]
+        location_data.append({
+            'location': loc,
+            'all_dates': window_dates,
+            'rows': rows,
+            'available_providers': available_providers,
+        })
 
     r = make_response(render_template(
         'index.html',
