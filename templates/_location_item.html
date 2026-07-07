@@ -1,0 +1,87 @@
+<div class="loc-item {% if loc.hidden %}loc-hidden{% endif %}"
+     data-id="{{ loc.id }}"
+     draggable="true"
+     ondragstart="onDragStart(event)"
+     ondragover="onDragOver(event)"
+     ondrop="onDrop(event)"
+     ondragend="onDragEnd(event)">
+  <div class="loc-item-header">
+    <span class="loc-drag" title="Drag to reorder">⠿</span>
+    <div style="flex:1; min-width:0;">
+      <div class="loc-item-name">{{ loc.name }}</div>
+      <div class="loc-item-meta">
+        {{ '%.4f'|format(loc.latitude or 0) }}°, {{ '%.4f'|format(loc.longitude or 0) }}°
+        {% if loc.hidden %}&nbsp;·&nbsp; <span style="color:var(--muted);">hidden</span>{% endif %}
+      </div>
+    </div>
+    <div class="loc-item-actions">
+      <form method="post" action="{{ url_for('toggle_location_hidden', location_id=loc.id) }}"
+            style="display:contents;">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <label style="display:flex; align-items:center; gap:.35rem; font-size:.82rem; cursor:pointer;">
+          <input type="checkbox" {% if not loc.hidden %}checked{% endif %}
+                 onchange="this.form.submit()" title="Visible on front page">
+          Visible
+        </label>
+      </form>
+      <form method="post" action="{{ url_for('delete_location', location_id=loc.id) }}"
+            onsubmit="return confirm('Delete {{ loc.name }} and all its data?')"
+            style="display:contents;">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ url_for('settings_page', tab='locations') }}">
+        <button type="submit" class="btn btn-danger btn-sm">✕</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="loc-providers">
+    {% for src in srcs %}
+    <div class="loc-src-row">
+      <span class="loc-src-name {% if not src.enabled %}disabled{% endif %}">
+        {{ provider_labels.get(src.provider, src.provider) }}
+      </span>
+      <form method="post" action="{{ url_for('toggle_source_enabled', location_id=loc.id, provider=src.provider) }}"
+            style="display:contents;">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <label style="display:flex; align-items:center; gap:.35rem; font-size:.82rem; cursor:pointer;">
+          <input type="checkbox" {% if src.enabled %}checked{% endif %}
+                 onchange="this.form.submit()">
+          Enabled
+        </label>
+      </form>
+    </div>
+    {% endfor %}
+
+    {% if avail %}
+    <div class="loc-src-add">
+      <select id="src-sel-{{ loc.id }}" onchange="srcSelChange({{ loc.id }})">
+        <option value="">+ Add provider…</option>
+        {% for p in avail %}
+        <option value="{{ p.name }}">{{ p.display_name }}</option>
+        {% endfor %}
+      </select>
+      {% for p in avail %}
+      <div id="src-pane-{{ loc.id }}-{{ p.name }}" style="display:none; display:none; flex-wrap:wrap; gap:.4rem; align-items:flex-end;">
+        <input type="text" class="search-input" style="font-size:.82rem; padding:.3rem .55rem; width:220px;"
+               id="src-q-{{ loc.id }}-{{ p.name }}"
+               placeholder="Search city in {{ p.display_name }}…"
+               autocomplete="off"
+               oninput="srcSearch({{ loc.id }}, '{{ p.name }}', this.value)">
+        <div class="search-results" id="src-results-{{ loc.id }}-{{ p.name }}" style="font-size:.82rem;"></div>
+        <span id="src-chosen-label-{{ loc.id }}-{{ p.name }}" style="font-size:.82rem; color:var(--primary);"></span>
+        <form method="post" action="{{ url_for('add_location_source_route', location_id=loc.id) }}" style="display:contents;">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="provider" value="{{ p.name }}">
+          <input type="hidden" name="provider_location_id" id="src-plid-{{ loc.id }}-{{ p.name }}">
+          <input type="hidden" name="metadata" id="src-meta-{{ loc.id }}-{{ p.name }}" value="{}">
+          <button type="submit" class="btn btn-primary btn-sm"
+                  id="src-submit-{{ loc.id }}-{{ p.name }}" disabled>Add</button>
+        </form>
+        <button type="button" class="btn btn-outline btn-sm"
+                onclick="srcClear({{ loc.id }}, '{{ p.name }}')">Cancel</button>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>

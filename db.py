@@ -187,11 +187,11 @@ def get_provider_delay(provider: str) -> float:
 
 # ── locations ─────────────────────────────────────────────────────────────────
 
-def add_location(name: str, latitude: float, longitude: float) -> int:
+def add_location(name: str, latitude: float, longitude: float, hidden: bool = False) -> int:
     with get_db() as conn:
         cur = conn.execute(
-            'INSERT INTO locations (name, latitude, longitude) VALUES (?, ?, ?)',
-            (name, latitude, longitude),
+            'INSERT INTO locations (name, latitude, longitude, hidden) VALUES (?, ?, ?, ?)',
+            (name, latitude, longitude, int(hidden)),
         )
         return cur.lastrowid
 
@@ -579,6 +579,16 @@ def get_existing_forecast_times(location_id: int, provider: str) -> set[tuple[st
                WHERE location_id = ? AND provider = ?''',
             (location_id, provider),
         )}
+
+
+def get_imported_dwd_ids() -> set[str]:
+    """Return set of DWD station IDs that are already imported as location sources."""
+    with get_db() as conn:
+        rows = conn.execute(
+            'SELECT DISTINCT provider_location_id FROM location_sources WHERE provider = ?',
+            ('dwd',),
+        ).fetchall()
+        return {r[0] for r in rows}
 
 
 def recently_polled(location_id: int, provider: str, max_age_minutes: int = 50) -> bool:

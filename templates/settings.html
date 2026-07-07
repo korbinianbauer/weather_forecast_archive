@@ -318,108 +318,105 @@
       <h2 style="margin:0;">Locations</h2>
       <a href="{{ url_for('index') }}?add=1" class="btn btn-outline btn-sm" style="margin-left:auto;">Add location</a>
     </div>
-    {% if all_locations %}
+    {% if regular_locations %}
     <div class="loc-list" id="locList" style="max-width:620px;">
-      {% for loc in all_locations %}
+      {% for loc in regular_locations %}
       {% set srcs = location_sources.get(loc.id, []) %}
       {% set avail = available_providers_by_loc.get(loc.id, []) %}
-      <div class="loc-item {% if loc.hidden %}loc-hidden{% endif %}"
-           data-id="{{ loc.id }}"
-           draggable="true"
-           ondragstart="onDragStart(event)"
-           ondragover="onDragOver(event)"
-           ondrop="onDrop(event)"
-           ondragend="onDragEnd(event)">
-        <div class="loc-item-header">
-          <span class="loc-drag" title="Drag to reorder">⠿</span>
-          <div style="flex:1; min-width:0;">
-            <div class="loc-item-name">{{ loc.name }}</div>
-            <div class="loc-item-meta">
-              {{ '%.4f'|format(loc.latitude or 0) }}°, {{ '%.4f'|format(loc.longitude or 0) }}°
-              {% if loc.hidden %}&nbsp;·&nbsp; <span style="color:var(--muted);">hidden</span>{% endif %}
-            </div>
-          </div>
-          <div class="loc-item-actions">
-            <form method="post" action="{{ url_for('toggle_location_hidden', location_id=loc.id) }}"
-                  style="display:contents;">
-              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-              <label style="display:flex; align-items:center; gap:.35rem; font-size:.82rem; cursor:pointer;">
-                <input type="checkbox" {% if not loc.hidden %}checked{% endif %}
-                       onchange="this.form.submit()" title="Visible on front page">
-                Visible
-              </label>
-            </form>
-            <form method="post" action="{{ url_for('delete_location', location_id=loc.id) }}"
-                  onsubmit="return confirm('Delete {{ loc.name }} and all its data?')"
-                  style="display:contents;">
-              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-              <input type="hidden" name="next" value="{{ url_for('settings_page', tab='locations') }}">
-              <button type="submit" class="btn btn-danger btn-sm">✕</button>
-            </form>
-          </div>
-        </div>
-
-        <div class="loc-providers">
-          {% for src in srcs %}
-          <div class="loc-src-row">
-            <span class="loc-src-name {% if not src.enabled %}disabled{% endif %}">
-              {{ provider_labels.get(src.provider, src.provider) }}
-            </span>
-            <form method="post" action="{{ url_for('toggle_source_enabled', location_id=loc.id, provider=src.provider) }}"
-                  style="display:contents;">
-              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-              <label style="display:flex; align-items:center; gap:.35rem; font-size:.82rem; cursor:pointer;">
-                <input type="checkbox" {% if src.enabled %}checked{% endif %}
-                       onchange="this.form.submit()">
-                Enabled
-              </label>
-            </form>
-          </div>
-          {% endfor %}
-
-          {% if avail %}
-          <div class="loc-src-add">
-            <select id="src-sel-{{ loc.id }}" onchange="srcSelChange({{ loc.id }})">
-              <option value="">+ Add provider…</option>
-              {% for p in avail %}
-              <option value="{{ p.name }}">{{ p.display_name }}</option>
-              {% endfor %}
-            </select>
-            {% for p in avail %}
-            <div id="src-pane-{{ loc.id }}-{{ p.name }}" style="display:none; display:none; flex-wrap:wrap; gap:.4rem; align-items:flex-end;">
-              <input type="text" class="search-input" style="font-size:.82rem; padding:.3rem .55rem; width:220px;"
-                     id="src-q-{{ loc.id }}-{{ p.name }}"
-                     placeholder="Search city in {{ p.display_name }}…"
-                     autocomplete="off"
-                     oninput="srcSearch({{ loc.id }}, '{{ p.name }}', this.value)">
-              <div class="search-results" id="src-results-{{ loc.id }}-{{ p.name }}" style="font-size:.82rem;"></div>
-              <span id="src-chosen-label-{{ loc.id }}-{{ p.name }}" style="font-size:.82rem; color:var(--primary);"></span>
-              <form method="post" action="{{ url_for('add_location_source_route', location_id=loc.id) }}" style="display:contents;">
-                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                <input type="hidden" name="provider" value="{{ p.name }}">
-                <input type="hidden" name="provider_location_id" id="src-plid-{{ loc.id }}-{{ p.name }}">
-                <input type="hidden" name="metadata" id="src-meta-{{ loc.id }}-{{ p.name }}" value="{}">
-                <button type="submit" class="btn btn-primary btn-sm"
-                        id="src-submit-{{ loc.id }}-{{ p.name }}" disabled>Add</button>
-              </form>
-              <button type="button" class="btn btn-outline btn-sm"
-                      onclick="srcClear({{ loc.id }}, '{{ p.name }}')">Cancel</button>
-            </div>
-            {% endfor %}
-          </div>
-          {% endif %}
-        </div>
-      </div>
+      {% include "_location_item.html" %}
       {% endfor %}
     </div>
     <div style="font-size:.78rem; color:var(--muted); margin-top:.75rem;">
       Drag rows to reorder. Order is saved automatically.
     </div>
-    {% else %}
+    {% elif not dwd_locations %}
     <div class="empty-state">
       <p>No locations yet. <a href="{{ url_for('index') }}?add=1">Add one →</a></p>
     </div>
     {% endif %}
+
+    {% if dwd_locations %}
+    <details style="margin-top:1.5rem;">
+      <summary style="cursor:pointer; font-weight:600; font-size:1rem; padding:.4rem 0;">
+        DWD stations ({{ dwd_locations|length }})
+      </summary>
+      <div class="loc-list" style="max-width:620px; margin-top:.75rem;">
+        {% for loc in dwd_locations %}
+        {% set srcs = location_sources.get(loc.id, []) %}
+        {% set avail = available_providers_by_loc.get(loc.id, []) %}
+        {% include "_location_item.html" %}
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+
+    <details style="margin-top:1.5rem;" {% if dwd_stations_by_state %}open{% endif %}>
+      <summary style="cursor:pointer; font-weight:600; font-size:1rem; padding:.4rem 0;">
+        Import DWD weather stations
+      </summary>
+
+      {% if dwd_stations_by_state %}
+      <div style="display:flex; gap:1rem; align-items:center; margin:.75rem 0; flex-wrap:wrap;">
+        <input type="text" id="dwdFilter" placeholder="Filter by name…"
+               style="padding:.4rem .6rem; width:250px; border:1px solid var(--border); border-radius:6px;
+                      font-size:.85rem; background:var(--surface); color:var(--text);"
+               oninput="filterDwdStations()">
+        <span style="font-size:.85rem;">
+          <a href="#" onclick="selectAllDwd(true); return false;">Select all</a>
+          &middot;
+          <a href="#" onclick="selectAllDwd(false); return false;">Deselect all</a>
+        </span>
+        <span id="dwdSelectedCount" style="font-size:.85rem; color:var(--muted);">0 selected</span>
+      </div>
+
+      <form id="dwdImportForm" method="post" action="{{ url_for('import_dwd_stations') }}"
+            style="max-width:620px;">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <div id="dwdStationList" style="max-height:500px; overflow-y:auto; border:1px solid var(--border);
+              border-radius:6px; padding:.35rem .5rem; background:var(--surface);">
+          {% for state, stations in dwd_stations_by_state %}
+          <div class="dwd-state-group" data-state="{{ state }}">
+            <div style="display:flex; align-items:center; gap:.5rem; padding:.35rem .4rem;
+                        cursor:pointer; border-radius:4px; user-select:none;"
+                 onclick="toggleDwdState(this)">
+              <span style="font-weight:600; font-size:.85rem;">{{ state }}</span>
+              <span style="font-size:.75rem; color:var(--muted);">({{ stations|length }})</span>
+              <span style="margin-left:auto; font-size:.8rem;">
+                <a href="#" onclick="event.stopPropagation(); selectAllInState(this, true); return false;">All</a>
+                &middot;
+                <a href="#" onclick="event.stopPropagation(); selectAllInState(this, false); return false;">None</a>
+              </span>
+            </div>
+            <div class="dwd-station-list" style="display:none; padding-left:.6rem;">
+              {% for s in stations %}
+              <label class="dwd-station-label" data-name="{{ s.name|lower }}"
+                     style="display:flex; align-items:center; gap:.5rem; padding:.12rem .3rem; font-size:.82rem; cursor:pointer;">
+                <input type="checkbox" name="station_id" value="{{ s.id }}"
+                       class="dwd-checkbox" {% if s.imported %}disabled checked{% endif %}>
+                <span style="{% if s.imported %}color:var(--muted);{% endif %}">{{ s.name }}</span>
+                {% if s.imported %}
+                <span style="font-size:.72rem; color:var(--muted); margin-left:auto;">✓ imported</span>
+                {% endif %}
+              </label>
+              {% endfor %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+
+        <div style="margin-top:.75rem;">
+          <button type="submit" class="btn btn-primary" id="importDwdBtn" disabled
+                  onclick="document.getElementById('importDwdBtn').disabled=true; this.form.submit();">
+            Import selected (0)
+          </button>
+        </div>
+      </form>
+      {% else %}
+      <div style="font-size:.85rem; color:var(--muted); margin-top:.5rem;">
+        Could not load DWD station list.
+      </div>
+      {% endif %}
+    </details>
 
     {# ════════════════════════════════════════ DATABASE ═══════════════════════ #}
     {% elif tab == 'database' %}
@@ -991,5 +988,50 @@ if (document.getElementById('eval-location')) {
   evalLoadProviders();
 }
 {% endif %}
+
+// ── DWD station import UI ──────────────────────────────────────────
+
+function filterDwdStations() {
+  const q = (document.getElementById('dwdFilter').value || '').toLowerCase();
+  document.querySelectorAll('.dwd-station-label').forEach(label => {
+    label.style.display = label.dataset.name.includes(q) ? '' : 'none';
+  });
+  document.querySelectorAll('.dwd-state-group').forEach(group => {
+    const visible = group.querySelectorAll('.dwd-station-label[style*="display: none"]');
+    const total = group.querySelectorAll('.dwd-station-label').length;
+    group.style.display = (q && visible.length === total) ? 'none' : '';
+  });
+}
+
+function toggleDwdState(el) {
+  const list = el.parentElement.querySelector('.dwd-station-list');
+  list.style.display = list.style.display === 'none' ? '' : 'none';
+}
+
+function selectAllDwd(select) {
+  document.querySelectorAll('.dwd-checkbox:not(:disabled)').forEach(cb => cb.checked = select);
+  updateDwdCount();
+}
+
+function selectAllInState(el, select) {
+  const group = el.closest('.dwd-state-group');
+  group.querySelectorAll('.dwd-checkbox:not(:disabled)').forEach(cb => cb.checked = select);
+  updateDwdCount();
+}
+
+function updateDwdCount() {
+  const count = document.querySelectorAll('.dwd-checkbox:checked:not(:disabled)').length;
+  const btn = document.getElementById('importDwdBtn');
+  if (btn) {
+    btn.textContent = 'Import selected (' + count + ')';
+    btn.disabled = count === 0;
+  }
+  const span = document.getElementById('dwdSelectedCount');
+  if (span) span.textContent = count + ' selected';
+}
+
+document.querySelectorAll('.dwd-checkbox').forEach(cb => {
+  cb.addEventListener('change', updateDwdCount);
+});
 </script>
 {% endblock %}

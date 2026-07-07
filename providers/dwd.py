@@ -164,6 +164,11 @@ class DwdProvider(WeatherProvider):
             out.append(d)
         return out
 
+    @staticmethod
+    def all_stations() -> list[dict]:
+        """Return the full list of active DWD stations."""
+        return _load_stations()
+
     def _to_result(self, s: dict) -> LocationResult:
         return LocationResult(
             name=s['name'],

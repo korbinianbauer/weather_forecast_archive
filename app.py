@@ -12,7 +12,7 @@ from collections import defaultdict
 from datetime import date as _date, datetime, timedelta
 from functools import wraps
 
-from flask import (Flask, abort, jsonify, make_response, redirect,
+from flask import (Flask, abort, flash, jsonify, make_response, redirect,
                    render_template, request, session, url_for)
 
 import db
@@ -1072,6 +1072,33 @@ def settings_page():
         configured = {s['provider'] for s in srcs}
         available_providers_by_loc[loc['id']] = [p for p in all_providers_list if p.name not in configured]
 
+    # Separate DWD bulk-imported locations
+    regular_locations = []
+    dwd_locations = []
+    imported_dwd_ids = db.get_imported_dwd_ids()
+    for loc in all_locations:
+        srcs = location_sources.get(loc['id'], [])
+        is_dwd_import = any(
+            s['provider'] == 'dwd' and s['provider_location_id'] in imported_dwd_ids
+            for s in srcs
+        )
+        if is_dwd_import:
+            dwd_locations.append(loc)
+        else:
+            regular_locations.append(loc)
+
+    # Load DWD stations for the import UI
+    dwd_stations = providers.get('dwd').all_stations()
+    dwd_stations_by_state: list[tuple[str, list[dict]]] = []
+    state_map: dict[str, list[dict]] = {}
+    for s in dwd_stations:
+        state_map.setdefault(s['state'], []).append(s)
+    for state in sorted(state_map, key=lambda st: -len(state_map[st])):
+        stations = state_map[state]
+        for s in stations:
+            s['imported'] = s['id'] in imported_dwd_ids
+        dwd_stations_by_state.append((state, stations))
+
     try:
         stored_colors = json.loads(all_settings.get('provider_colors', '{}'))
     except json.JSONDecodeError:
@@ -1142,12 +1169,15 @@ def settings_page():
         year_ago_iso=year_ago_iso,
         all_settings=all_settings,
         all_locations=all_locations,
+        regular_locations=regular_locations,
+        dwd_locations=dwd_locations,
         location_sources=location_sources,
         available_providers_by_loc=available_providers_by_loc,
         all_providers=all_providers_list,
         provider_labels=provider_labels,
         stored_colors=stored_colors,
         stored_delays=stored_delays,
+        dwd_stations_by_state=dwd_stations_by_state,
         db_tables=db_tables_summary,
         db_active_table=db_active_table,
         db_rows=db_rows,
@@ -1162,6 +1192,85 @@ def settings_page():
         db_next_url=db_next_url,
         db_clear_url=db_clear_url,
     )
+
+
+_import_dwd_lock = threading.Lock()
+
+
+@app.route('/locations/import_dwd', methods=['POST'])
+@login_required
+@csrf_protect
+def import_dwd_stations():
+    station_ids = request.form.getlist('station_id')
+    if not station_ids:
+        flash('No DWD stations selected.')
+        return redirect(url_for('settings_page', tab='locations'))
+
+    if not _import_dwd_lock.acquire(blocking=False):
+        flash('An import is already in progress.')
+        return redirect(url_for('settings_page', tab='locations'))
+
+    try:
+        all_stations = {s['id']: s for s in providers.get('dwd').all_stations()}
+        already = db.get_imported_dwd_ids()
+
+        new_locations: list[tuple[int, dict]] = []
+        for sid in station_ids:
+            if sid in already:
+                continue
+            station = all_stations.get(sid)
+            if not station:
+                continue
+            loc_id = db.add_location(
+                station['name'], station['latitude'], station['longitude'],
+                hidden=True,
+            )
+            db.add_location_source(loc_id, 'dwd', sid, {
+                'station_name': station['name'],
+                'state': station['state'],
+                'height': station['height'],
+                'imported_dwd': True,
+            })
+            new_locations.append((loc_id, station))
+
+        if not new_locations:
+            flash('All selected stations are already imported.')
+            return redirect(url_for('settings_page', tab='locations'))
+
+        def _match_providers():
+            try:
+                search_cache: dict[tuple[str, str], object] = {}
+                for idx, (loc_id, station) in enumerate(new_locations):
+                    city = station['name'].split('-')[0].split('(')[0].strip()
+                    for pname in ('wetter_com', 'meteoblue', 'wetteronline'):
+                        key = (pname, city)
+                        if key not in search_cache:
+                            # Rate-limit: 1.5s between searches per provider
+                            if idx > 0 or search_cache:
+                                time.sleep(1.5)
+                            try:
+                                results = providers.get(pname).search(city)
+                                search_cache[key] = results[0] if results else None
+                            except Exception:
+                                search_cache[key] = None
+                        cached = search_cache[key]
+                        if cached:
+                            db.add_location_source(
+                                loc_id, pname,
+                                cached.provider_location_id,
+                                cached.extra or {},
+                            )
+            finally:
+                _import_dwd_lock.release()
+
+        threading.Thread(target=_match_providers, daemon=True).start()
+
+        flash(f'Added {len(new_locations)} DWD station(s). Matching forecast providers in background…')
+    except Exception:
+        _import_dwd_lock.release()
+        raise
+
+    return redirect(url_for('settings_page', tab='locations'))
 
 
 @app.route('/settings/schedule', methods=['POST'])
