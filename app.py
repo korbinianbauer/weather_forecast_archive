@@ -214,6 +214,26 @@ def _fmt_date(s: str) -> str:
     return datetime.strptime(s, '%Y-%m-%d').strftime('%-d %b %Y')
 
 
+def _current_weather(location_id: int, provider: str) -> dict | None:
+    """Best 'now' snapshot for the overview card: the hourly entry closest to
+    the current time from the newest poll, falling back to today's daily row."""
+    now = datetime.now()
+    best = None
+    for e in db.get_latest_forecast(location_id, provider=provider, granularity='hourly'):
+        try:
+            t = datetime.fromisoformat(e['forecast_time'])
+        except ValueError:
+            continue
+        diff = abs((t - now).total_seconds())
+        if best is None or diff < best[0]:
+            best = (diff, e)
+    if best and best[0] <= 3 * 3600:
+        return best[1]
+    today = now.date().isoformat()
+    rows = db.get_latest_forecast_per_date(location_id, provider, today, today)
+    return rows[0] if rows else None
+
+
 @app.route('/')
 def index():
     locs = db.get_locations()
@@ -253,12 +273,15 @@ def index():
 
         available_providers = [p for p in providers.all_providers()
                                if p.name not in configured_providers]
+        first_provider = sources[0]['provider'] if sources else None
         location_data.append({
             'location': loc,
             'all_dates': window_dates,
             'rows': rows,
             'available_providers': available_providers,
             'pressure_range': db.get_metric_range(loc['id'], 'pressure'),
+            'current': _current_weather(loc['id'], first_provider) if first_provider else None,
+            'current_provider': first_provider,
         })
 
     r = make_response(render_template(

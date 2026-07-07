@@ -50,6 +50,29 @@
   .day-cell .dc-min { color: var(--cold); }
   .day-cell .dc-precip { font-size: .62rem; color: #3b82f6; margin-top: .1rem; }
 
+  /* overview grid of small per-location cards */
+  .loc-overview { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+                  gap: .9rem; margin-bottom: 1.5rem; }
+  .ov-card { background: var(--surface); border: 1px solid var(--border);
+             border-radius: var(--radius); box-shadow: var(--shadow);
+             padding: .85rem .6rem; cursor: pointer; text-align: center;
+             transition: border-color .15s; }
+  .ov-card:hover { border-color: var(--primary); }
+  .ov-card.active { border-color: var(--primary); outline: 2px solid var(--primary); outline-offset: -2px; }
+  .ov-name { font-weight: 700; font-size: .95rem; margin-bottom: .25rem; }
+  .ov-card img.ov-icon { width: 44px; height: 44px; object-fit: contain; }
+  .ov-temp { font-size: 1.35rem; font-weight: 700; }
+  .ov-temp .dc-min { font-size: 1rem; }
+  .ov-cond { font-size: .74rem; color: var(--muted); line-height: 1.2; min-height: 1.2em; }
+  .ov-meta { font-size: .66rem; color: var(--muted); margin-top: .45rem; }
+  .loc-detail { display: none; }
+  .loc-detail.open { display: block; }
+
+  .date-nav { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+              margin-bottom: .85rem; }
+  .date-nav-group { display: inline-flex; gap: .25rem; }
+  .date-nav .btn-sm { padding: .3rem .5rem; font-size: .75rem; }
+
   .forecast-plot { display: none; }
   .forecast-plot.visible { display: block; }
   .plot-charts { display: flex; flex-direction: column; gap: .75rem; }
@@ -63,32 +86,53 @@
 
 <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem;">
   <h2 style="margin:0; flex:1;" id="page-title">Forecast</h2>
-
-  <form method="get" style="display:flex; align-items:center; gap:.5rem; flex-shrink:0;">
-    <a href="{{ url_for('index') }}" class="btn btn-outline btn-sm">Today</a>
-    <input type="date" name="start" value="{{ date_start }}"
-           onchange="this.form.submit()"
-           style="padding:.35rem .6rem; border:1px solid var(--border); border-radius:6px;
-                  font-size:.85rem; background:var(--surface); color:var(--text); cursor:pointer;">
-    <span style="font-size:.8rem; color:var(--muted);">–</span>
-    <span style="padding:.35rem .6rem; border:1px solid var(--border); border-radius:6px;
-                 font-size:.85rem; background:var(--surface); color:var(--muted); white-space:nowrap;">
-      {{ date_end }}
-    </span>
-  </form>
-
   {% if session.logged_in %}
-  <div style="flex:1; display:flex; justify-content:flex-end;">
-    <button class="btn btn-primary" onclick="openModal()">+ Add Location</button>
-  </div>
+  <button class="btn btn-primary" onclick="openModal()">+ Add Location</button>
   {% endif %}
 </div>
 
 {% if location_data %}
+
+  {# ── overview: one small card per location, current weather from its first provider ── #}
+  <div class="loc-overview">
+    {% for item in location_data %}
+    {% set loc = item.location %}
+    {% set cur = item.current %}
+    <div class="ov-card" id="ov-{{ loc.id }}" onclick="toggleLocationCard({{ loc.id }})"
+         title="Show forecast details for {{ loc.name }}">
+      <div class="ov-name">{{ loc.name }}
+        {% if loc.id in polling_location_ids %}<span class="spinner" style="margin-left:.3rem;"></span>{% endif %}
+      </div>
+      {% if cur %}
+        {% if cur.icon_url %}
+        <img class="ov-icon" src="{{ cur.icon_url }}" alt="{{ cur.condition_text or '' }}"
+             onerror="this.style.display='none'">
+        {% endif %}
+        <div class="ov-temp">
+          {% if cur.temperature is not none %}
+            {{ cur.temperature|round|int }}°
+          {% elif cur.temp_max is not none or cur.temp_min is not none %}
+            {% if cur.temp_max is not none %}<span class="dc-max">{{ cur.temp_max|round|int }}°</span>{% endif %}
+            {% if cur.temp_min is not none %}<span class="dc-min">/{{ cur.temp_min|round|int }}°</span>{% endif %}
+          {% else %}—{% endif %}
+        </div>
+        <div class="ov-cond">{{ cur.condition_text or '' }}</div>
+        <div class="ov-meta">
+          {{ provider_labels.get(item.current_provider, item.current_provider) }} ·
+          <time class="local-time" datetime="{{ cur.fetched_at }}">{{ cur.fetched_at|dt }}</time>
+        </div>
+      {% else %}
+        <div class="ov-cond" style="padding:1rem 0;">No data yet</div>
+        <div class="ov-meta">{{ provider_labels.get(item.current_provider, item.current_provider or '—') }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
   {% for item in location_data %}
   {% set loc = item.location %}
   {% set n = item.all_dates | length %}
-  <div class="card gap" id="card-{{ loc.id }}">
+  <div class="card gap loc-detail" id="card-{{ loc.id }}">
 
     <div class="loc-header">
       <h2>{{ loc.name }}</h2>
@@ -107,6 +151,26 @@
         </form>
         {% endif %}
       </div>
+    </div>
+
+    {# ── date navigation ── #}
+    <div class="date-nav">
+      <a class="btn btn-outline btn-sm" href="{{ url_for('index') }}#loc-{{ loc.id }}">Today</a>
+      <span class="date-nav-group">
+        <button class="btn btn-outline btn-sm" onclick="navShift(0, -1, {{ loc.id }})" title="One month back">−1M</button>
+        <button class="btn btn-outline btn-sm" onclick="navShift(-7, 0, {{ loc.id }})" title="One week back">−1W</button>
+        <button class="btn btn-outline btn-sm" onclick="navShift(-1, 0, {{ loc.id }})" title="One day back">−1D</button>
+      </span>
+      <input type="date" value="{{ date_start }}"
+             onchange="navStartTo(this.value, {{ loc.id }})"
+             style="padding:.3rem .5rem; border:1px solid var(--border); border-radius:6px;
+                    font-size:.82rem; background:var(--surface); color:var(--text); cursor:pointer;">
+      <span style="font-size:.78rem; color:var(--muted); white-space:nowrap;">– {{ date_end }}</span>
+      <span class="date-nav-group">
+        <button class="btn btn-outline btn-sm" onclick="navShift(1, 0, {{ loc.id }})" title="One day forward">+1D</button>
+        <button class="btn btn-outline btn-sm" onclick="navShift(7, 0, {{ loc.id }})" title="One week forward">+1W</button>
+        <button class="btn btn-outline btn-sm" onclick="navShift(0, 1, {{ loc.id }})" title="One month forward">+1M</button>
+      </span>
     </div>
 
     {# ── polling indicator ── #}
@@ -1036,6 +1100,46 @@ function buildTempTraces(rows, dates) {
     }
   }
   return traces;
+}
+
+// ── date navigation (inside the open detail card) ───────────────────────────
+const _dateStart = {{ date_start | tojson }};
+
+function navStartTo(dateStr, locId) {
+  if (!dateStr) return;
+  location.href = '?start=' + encodeURIComponent(dateStr) + '#loc-' + locId;
+}
+
+function navShift(days, months, locId) {
+  const [y, m, d] = _dateStart.split('-').map(Number);
+  const dt = new Date(y, m - 1 + months, d + days);
+  const s = dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0')
+          + '-' + String(dt.getDate()).padStart(2, '0');
+  navStartTo(s, locId);
+}
+
+// ── overview cards: expand/collapse the full location card ──────────────────
+function toggleLocationCard(locId) {
+  const card = document.getElementById('card-' + locId);
+  if (!card) return;
+  const wasOpen = card.classList.contains('open');
+  document.querySelectorAll('.loc-detail.open').forEach(el => el.classList.remove('open'));
+  document.querySelectorAll('.ov-card.active').forEach(el => el.classList.remove('active'));
+  if (wasOpen) {
+    history.replaceState(null, '', location.pathname + location.search);
+    return;
+  }
+  card.classList.add('open');
+  document.getElementById('ov-' + locId)?.classList.add('active');
+  history.replaceState(null, '', '#loc-' + locId);
+  window.dispatchEvent(new Event('resize')); // let Plotly recompute chart widths
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// Restore the open card across reloads (e.g. after a poll finishes)
+{
+  const m = location.hash.match(/^#loc-(\d+)$/);
+  if (m && document.getElementById('card-' + m[1])) toggleLocationCard(+m[1]);
 }
 
 // Reload the page, but never while the Add-Location dialog is open —
