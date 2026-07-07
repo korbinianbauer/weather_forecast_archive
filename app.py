@@ -258,6 +258,7 @@ def index():
             'all_dates': window_dates,
             'rows': rows,
             'available_providers': available_providers,
+            'pressure_range': db.get_metric_range(loc['id'], 'pressure'),
         })
 
     r = make_response(render_template(
@@ -521,6 +522,7 @@ def api_evolution(location_id):
         'mode': mode,
         'provider_labels': provider_labels_map,
         'default_provider': default_provider,
+        'pressure_range': db.get_metric_range(location_id, 'pressure'),
     })
 
 

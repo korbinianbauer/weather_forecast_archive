@@ -526,6 +526,23 @@ def get_hourly_runs(
         return [dict(r) for r in rows]
 
 
+_METRIC_COLUMNS = {'temperature', 'temp_max', 'temp_min', 'precip_probability',
+                   'precip_amount', 'wind_speed', 'sunshine_hours', 'cloud_cover',
+                   'pressure', 'humidity'}
+
+
+def get_metric_range(location_id: int, column: str) -> tuple[float | None, float | None]:
+    """Long-term (min, max) of a metric across all archived snapshots for a location."""
+    if column not in _METRIC_COLUMNS:
+        raise ValueError(f'unknown metric column: {column}')
+    with get_db() as conn:
+        row = conn.execute(
+            f'SELECT MIN({column}), MAX({column}) FROM forecast_snapshots WHERE location_id = ?',
+            (location_id,),
+        ).fetchone()
+        return row[0], row[1]
+
+
 def recently_polled(location_id: int, provider: str, max_age_minutes: int = 50) -> bool:
     """Debounce so a poller restart near a scheduled fire doesn't double-poll;
     unlike a per-day check this never suppresses a multi-times-per-day cron."""

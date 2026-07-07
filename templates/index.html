@@ -191,6 +191,7 @@
   window.__loc = window.__loc || {};
   window.__loc[{{ loc.id }}] = {
     dates: {{ item.all_dates | tojson }},
+    pressureRange: {{ item.pressure_range | tojson }},
     rows: [
       {% for row in item.rows %}
       {
@@ -611,7 +612,7 @@ function renderEvolutionInline(locId, data) {
       const key = t.legendgroup || t.name;
       if (key) (traceMap[divId][key] ||= []).push(i);
     });
-    const yr = yRangeFromTraces(traces, metric);
+    const yr = yRangeFromTraces(traces, metric, data.pressure_range);
     Plotly.newPlot(divId, traces, {
       margin: { t: 8, b: 50, l: 50, r: 12 },
       xaxis: xaxisLayout,
@@ -770,10 +771,22 @@ function _removeColHover(loc, date) {
 const FLOOR0 = new Set(['sun','precip_prob','precip_amt','wind','cloud','humidity',
   'sunshine_hours','precipitation_precip_probability','precipitation_precip_amount',
   'wind_wind_speed','cloud_cloud_cover','humidity_humidity']);
-const CAP100 = new Set(['precip_prob','cloud','humidity',
+const PERCENT = new Set(['precip_prob','cloud','humidity',
   'precipitation_precip_probability','cloud_cloud_cover','humidity_humidity']);
+const PRESSURE = new Set(['pressure', 'pressure_pressure']);
 
-function yRangeFromTraces(traces, metricId) {
+function yRangeFromTraces(traces, metricId, pressureRange) {
+  // Percent metrics always get a fixed 0–100 axis
+  if (PERCENT.has(metricId)) return [0, 100];
+
+  // Pressure scales to the location's long-term min/max, not the visible traces
+  if (PRESSURE.has(metricId) && Array.isArray(pressureRange) &&
+      pressureRange[0] != null && pressureRange[1] != null) {
+    const [pmn, pmx] = pressureRange;
+    const ppad = (pmx - pmn) * 0.05 || 1;
+    return [pmn - ppad, pmx + ppad];
+  }
+
   let mn = Infinity, mx = -Infinity;
   for (const t of traces) {
     for (const v of (t.y || [])) {
@@ -785,7 +798,7 @@ function yRangeFromTraces(traces, metricId) {
   }
   if (!isFinite(mn)) return null;
   const pad = (mx - mn) * 0.08 || 1;
-  return [FLOOR0.has(metricId) ? 0 : mn - pad, CAP100.has(metricId) ? 100 : mx + pad];
+  return [FLOOR0.has(metricId) ? 0 : mn - pad, mx + pad];
 }
 
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -892,7 +905,7 @@ function renderPlot(locId) {
       if (t._provider) (traceMap[div.id][t._provider] ||= []).push(i);
     });
 
-    const yr = yRangeFromTraces(traces, metric.id);
+    const yr = yRangeFromTraces(traces, metric.id, loc.pressureRange);
     const layout = {
       margin: { t: 8, b: 36, l: 50, r: 12 },
       xaxis: {
