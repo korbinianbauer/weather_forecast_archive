@@ -696,6 +696,26 @@ function saveOrder() {
     body: JSON.stringify({ order }),
   });
 }
+function toggleVisible(checkbox, url) {
+  const item = checkbox.closest('.loc-item');
+  fetch(url, { method: 'POST', headers: { 'X-CSRF-Token': CSRF } });
+  item.classList.toggle('loc-hidden');
+  const meta = item.querySelector('.loc-item-meta');
+  const existing = meta.querySelector('.hidden-tag');
+  if (existing) {
+    existing.remove();
+  } else {
+    const span = document.createElement('span');
+    span.className = 'hidden-tag';
+    span.style.color = 'var(--muted)';
+    span.textContent = '\u00a0\u00b7\u00a0hidden';
+    meta.appendChild(span);
+  }
+}
+function toggleSourceEnabled(checkbox, url) {
+  fetch(url, { method: 'POST', headers: { 'X-CSRF-Token': CSRF } });
+  checkbox.closest('.loc-src-row').querySelector('.loc-src-name').classList.toggle('disabled');
+}
 {% endif %}
 
 {% if tab == 'locations' %}

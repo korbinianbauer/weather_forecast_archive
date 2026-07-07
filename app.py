@@ -976,7 +976,7 @@ def toggle_source_enabled(location_id, provider):
     source = next((s for s in sources if s['provider'] == provider), None)
     if source:
         db.set_source_enabled(location_id, provider, not source.get('enabled', 1))
-    return redirect(url_for('index'))
+    return {'ok': True}
 
 
 
@@ -1028,7 +1028,7 @@ def delete_location(location_id):
 @csrf_protect
 def toggle_location_hidden(location_id):
     db.toggle_location_hidden(location_id)
-    return redirect(url_for('settings_page', tab='locations'))
+    return {'ok': True}
 
 
 @app.route('/settings/locations/reorder', methods=['POST'])

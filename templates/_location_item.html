@@ -11,19 +11,15 @@
       <div class="loc-item-name">{{ loc.name }}</div>
       <div class="loc-item-meta">
         {{ '%.4f'|format(loc.latitude or 0) }}°, {{ '%.4f'|format(loc.longitude or 0) }}°
-        {% if loc.hidden %}&nbsp;·&nbsp; <span style="color:var(--muted);">hidden</span>{% endif %}
+        {% if loc.hidden %}<span class="hidden-tag" style="color:var(--muted);">&nbsp;·&nbsp;hidden</span>{% endif %}
       </div>
     </div>
     <div class="loc-item-actions">
-      <form method="post" action="{{ url_for('toggle_location_hidden', location_id=loc.id) }}"
-            style="display:contents;">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <label style="display:flex; align-items:center; gap:.35rem; font-size:.82rem; cursor:pointer;">
-          <input type="checkbox" {% if not loc.hidden %}checked{% endif %}
-                 onchange="this.form.submit()" title="Visible on front page">
-          Visible
-        </label>
-      </form>
+      <label style="display:flex; align-items:center; gap:.35rem; font-size:.82rem; cursor:pointer;">
+        <input type="checkbox" {% if not loc.hidden %}checked{% endif %}
+               onchange="toggleVisible(this, '{{ url_for('toggle_location_hidden', location_id=loc.id) }}')" title="Visible on front page">
+        Visible
+      </label>
       <form method="post" action="{{ url_for('delete_location', location_id=loc.id) }}"
             onsubmit="return confirm('Delete {{ loc.name }} and all its data?')"
             style="display:contents;">
@@ -40,15 +36,11 @@
       <span class="loc-src-name {% if not src.enabled %}disabled{% endif %}">
         {{ provider_labels.get(src.provider, src.provider) }}
       </span>
-      <form method="post" action="{{ url_for('toggle_source_enabled', location_id=loc.id, provider=src.provider) }}"
-            style="display:contents;">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <label style="display:flex; align-items:center; gap:.35rem; font-size:.82rem; cursor:pointer;">
-          <input type="checkbox" {% if src.enabled %}checked{% endif %}
-                 onchange="this.form.submit()">
-          Enabled
-        </label>
-      </form>
+      <label style="display:flex; align-items:center; gap:.35rem; font-size:.82rem; cursor:pointer;">
+        <input type="checkbox" {% if src.enabled %}checked{% endif %}
+               onchange="toggleSourceEnabled(this, '{{ url_for('toggle_source_enabled', location_id=loc.id, provider=src.provider) }}')">
+        Enabled
+      </label>
     </div>
     {% endfor %}
 
