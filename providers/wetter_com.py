@@ -197,28 +197,28 @@ def _apply_detail_extras(entries: list[ForecastEntry], tables: dict) -> None:
 # ── hourly parsing ────────────────────────────────────────────────────────────
 
 def _parse_hourly_tables(tables: dict) -> list[ForecastEntry]:
-    result = []
-    seen: set[str] = set()
+    # Pages overlap into the next day (a 3-hourly page by up to ~21 h), so a
+    # timestamp can appear on two pages. The page whose date matches the
+    # forecast date wins — it has the finer resolution for that day.
+    by_time: dict[str, ForecastEntry] = {}
     for date_str, table in sorted(tables.items()):
         try:
             base = date.fromisoformat(date_str)
         except ValueError:
             continue
         for entry in _parse_hourly_table(table, base):
-            # Pages overlap into the next day (e.g. today's page ends 02:00
-            # tomorrow); keep the first occurrence of each timestamp.
-            if entry.forecast_time not in seen:
-                seen.add(entry.forecast_time)
-                result.append(entry)
-    return result
+            if entry.forecast_time[:10] == date_str or entry.forecast_time not in by_time:
+                by_time[entry.forecast_time] = entry
+    return [by_time[t] for t in sorted(by_time)]
 
 
 def _parse_hourly_table(table, base: date) -> list[ForecastEntry]:
     """Parse one vhs-detail-diagram table into hourly entries.
 
-    The table holds one column per hour. Hour labels (HH:MM) appear in every
-    third cell of the time row; the first label anchors the column → hour
-    mapping, columns past 24:00 roll over into the next day.
+    The table holds one column per time step: hourly on near-term pages,
+    3-hourly on pages further out. The hour labels (HH:MM) in the time row
+    anchor the column → hour mapping and their spacing gives the step size;
+    columns past 24:00 roll over into the next day.
     """
     rows = table.find_all('tr')
 
@@ -236,15 +236,26 @@ def _parse_hourly_table(table, base: date) -> list[ForecastEntry]:
             continue
 
         if hours is None:
-            anchor = None
+            anchors: list[tuple[int, int]] = []
             for i, td in enumerate(cells):
                 m = re.search(r'(\d{1,2}):00', td.get_text(strip=True))
                 if m:
-                    anchor = (i, int(m.group(1)) or 24)  # page labels midnight as 00:00 = end of day
-                    break
-            if anchor is not None and not header:
-                idx, hour = anchor
-                hours = [hour - idx + j for j in range(len(cells))]
+                    h = int(m.group(1))
+                    if not anchors:
+                        h = h or 24  # page labels midnight as 00:00 = end of day
+                    else:
+                        while h <= anchors[-1][1]:  # rolled past midnight
+                            h += 24
+                    anchors.append((i, h))
+            if anchors and not header:
+                idx0, h0 = anchors[0]
+                step = 1
+                for i1, h1 in anchors[1:]:
+                    di, dh = i1 - idx0, h1 - h0
+                    if di > 0 and dh > 0 and dh % di == 0:
+                        step = dh // di
+                        break
+                hours = [h0 + (j - idx0) * step for j in range(len(cells))]
             continue
 
         rows_for_header.setdefault(header, []).append(cells)
