@@ -1038,6 +1038,15 @@ function buildTempTraces(rows, dates) {
   return traces;
 }
 
+// Reload the page, but never while the Add-Location dialog is open —
+// a running poll must not throw away the user's input.
+async function reloadWhenIdle() {
+  while (document.getElementById('modal')?.classList.contains('open')) {
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  location.reload();
+}
+
 async function refreshLocation(btn, locId, csrf) {
   btn.disabled = true;
   const orig = btn.innerHTML;
@@ -1054,7 +1063,7 @@ async function refreshLocation(btn, locId, csrf) {
       const data = await res.json();
       if (!data.running) break;
     }
-    location.reload();
+    await reloadWhenIdle();
   } catch (e) {
     btn.innerHTML = orig;
     btn.disabled = false;
@@ -1099,7 +1108,7 @@ document.querySelectorAll('.day-cell[data-date]:not(.empty)').forEach(cell => {
       } catch { ids.splice(i, 1); }
     }
   }
-  location.reload();
+  await reloadWhenIdle();
 })();
 {% endif %}
 </script>
