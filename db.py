@@ -476,6 +476,33 @@ def get_polls_covering_date(
         return result
 
 
+def get_daily_entries_in_range(
+    location_id: int,
+    date_start: str,
+    date_end: str,
+    providers: list[str] | None = None,
+) -> list[dict]:
+    """All daily forecast snapshots with forecast_time in [date_start, date_end]."""
+    with get_db() as conn:
+        if providers:
+            ph = ','.join('?' * len(providers))
+            provider_clause = f'AND provider IN ({ph})'
+            params: list = [location_id, date_start, date_end] + list(providers)
+        else:
+            provider_clause = ''
+            params = [location_id, date_start, date_end]
+
+        rows = conn.execute(
+            f'''SELECT * FROM forecast_snapshots
+                WHERE location_id = ? AND granularity = 'daily'
+                  AND date(forecast_time) BETWEEN ? AND ?
+                {provider_clause}
+                ORDER BY date(forecast_time), fetched_at''',
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def get_forecast_evolution(
     location_id: int,
     target_date: str,

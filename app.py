@@ -23,6 +23,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+app.json.sort_keys = False
 app.secret_key = os.environ.get('SECRET_KEY', '')
 if not app.secret_key:
     raise RuntimeError('SECRET_KEY environment variable is not set')
@@ -657,6 +658,247 @@ def _build_hourly_traces(rows: list[dict], provider_labels: dict) -> list[dict]:
     return traces
 
 
+_EVAL_VARIABLES = [
+    ('temperature',        'temperature_temperature'),
+    ('temp_max',           'temp_max_temperature'),
+    ('temp_min',           'temp_min_temperature'),
+    ('precip_probability', 'precipitation_precip_probability'),
+    ('precip_amount',      'precipitation_precip_amount'),
+    ('wind_speed',         'wind_wind_speed'),
+    ('sunshine_hours',     'sunshine_hours_sunshine'),
+    ('cloud_cover',        'cloud_cloud_cover'),
+    ('pressure',           'pressure_pressure'),
+    ('humidity',           'humidity_humidity'),
+]
+
+
+_VAR_ORDER = [
+    'temp_max', 'temp_min', 'temperature',
+    'sunshine_hours',
+    'precip_probability', 'precip_amount',
+    'wind_speed',
+    'cloud_cover',
+    'pressure',
+    'humidity',
+]
+
+_VAR_LABELS = {
+    'temp_max': 'Max Temp',
+    'temp_min': 'Min Temp',
+    'temperature': 'Avg Temp',
+    'sunshine_hours': 'Sunshine',
+    'precip_probability': 'Precip Prob',
+    'precip_amount': 'Precip Amount',
+    'wind_speed': 'Wind Speed',
+    'cloud_cover': 'Cloud Cover',
+    'pressure': 'Pressure',
+    'humidity': 'Humidity',
+}
+
+
+def _eval_var_traces(
+    forecast_rows: list[dict],
+    gt_values: dict[tuple[int, str], dict[str, float | None]],
+    variable: str,
+    selected: list[str] | None,
+    provider_labels: dict[str, str],
+    colors: dict[str, str],
+) -> dict[str, list[dict]]:
+    """Build Plotly traces for a single variable — returns {rmse: ..., bias: ...}."""
+    err: dict[str, dict[int, list[float]]] = defaultdict(lambda: defaultdict(list))
+    med_collect: dict[tuple[int, int, str], dict[str, float]] = {}
+
+    for r in forecast_rows:
+        lid, dt = r['_loc_id'], r['forecast_time'][:10]
+        gt_val = gt_values.get((lid, dt), {}).get(variable)
+        if gt_val is None:
+            continue
+        fv = r.get(variable)
+        if fv is None:
+            continue
+        try:
+            lead = (_date.fromisoformat(dt) - _date.fromisoformat(r['fetched_at'][:10])).days
+        except (ValueError, TypeError):
+            continue
+        if lead < 0:
+            continue
+        err[r['provider']][lead].append(fv - gt_val)
+        key = (lead, lid, dt)
+        if key not in med_collect:
+            med_collect[key] = {}
+        med_collect[key][r['provider']] = fv
+
+    med_err: dict[int, list[float]] = defaultdict(list)
+    for (lead, lid, dt), pv in med_collect.items():
+        gt_val = gt_values.get((lid, dt), {}).get(variable)
+        if gt_val is None:
+            continue
+        vs = [v for v in pv.values() if v is not None]
+        if len(vs) >= 2:
+            med_err[lead].append(statistics.median(vs) - gt_val)
+
+    def _build(metric: str) -> list[dict]:
+        traces: list[dict] = []
+        for prov in sorted(err):
+            if prov in _OBSERVATION_PROVIDERS:
+                continue
+            if selected and prov not in selected:
+                continue
+            label = provider_labels.get(prov, prov)
+            color = colors.get(prov, _DEFAULT_COLOR_HEX)
+            leads = sorted(err[prov])
+            if not leads:
+                continue
+            if metric == 'rmse':
+                ys = [statistics.mean(v ** 2 for v in err[prov][l]) ** 0.5 for l in leads]
+            else:
+                ys = [statistics.mean(err[prov][l]) for l in leads]
+            traces.append({
+                'x': leads, 'y': ys,
+                'type': 'scatter', 'mode': 'lines+markers',
+                'name': label,
+                'line': {'color': color, 'width': 2},
+                'marker': {'size': 6, 'color': color},
+            })
+        if len(med_err) >= 2:
+            leads = sorted(med_err)
+            if metric == 'rmse':
+                ys = [statistics.mean(v ** 2 for v in med_err[l]) ** 0.5 for l in leads]
+            else:
+                ys = [statistics.mean(med_err[l]) for l in leads]
+            mc = colors.get('median', '#111827')
+            traces.append({
+                'x': leads, 'y': ys,
+                'type': 'scatter', 'mode': 'lines+markers',
+                'name': 'Median',
+                'line': {'color': mc, 'width': 2, 'dash': 'dash'},
+                'marker': {'size': 6, 'color': mc},
+            })
+        return traces
+
+    return {'rmse': _build('rmse'), 'bias': _build('bias')}
+
+
+@app.route('/api/evaluation')
+@login_required
+def api_evaluation():
+    location_param = request.args.get('location_id', 'all')
+    date_start = request.args.get('date_start', (_date.today() - timedelta(days=365)).isoformat())
+    date_end   = request.args.get('date_end', _date.today().isoformat())
+    selected   = request.args.getlist('providers') or None
+
+    # Determine locations
+    if not location_param or location_param == 'all':
+        locations = db.get_locations(show_hidden=True)
+        if not locations:
+            return jsonify({'results': {}, 'warning': 'No locations.'})
+        location_ids = [loc['id'] for loc in locations]
+    else:
+        try:
+            loc_id = int(location_param)
+        except (ValueError, TypeError):
+            return jsonify({'error': 'invalid location_id'}), 400
+        loc = db.get_location(loc_id)
+        if not loc:
+            return jsonify({'error': 'not found'}), 404
+        location_ids = [loc_id]
+
+    # Fetch data
+    all_rows: list[dict] = []
+    for lid in location_ids:
+        rows = db.get_daily_entries_in_range(lid, date_start, date_end, providers=None)
+        for r in rows:
+            r['_loc_id'] = lid
+        all_rows.extend(rows)
+
+    if not all_rows:
+        return jsonify({'results': {}, 'warning': 'No data in selected range.'})
+
+    dwd_rows      = [r for r in all_rows if r['provider'] == 'dwd']
+    forecast_rows = [r for r in all_rows if r['provider'] not in _OBSERVATION_PROVIDERS]
+    if not forecast_rows:
+        return jsonify({'results': {}, 'warning': 'No forecast data available.'})
+
+    # ── ground truth per (location_id, target_date) for ALL variables ───────
+    by_loc_date: dict[tuple[int, str], list[dict]] = defaultdict(list)
+    for r in all_rows:
+        by_loc_date[(r['_loc_id'], r['forecast_time'][:10])].append(r)
+
+    gt_values: dict[tuple[int, str], dict[str, float | None]] = {}
+    for (lid, dt), date_rows in sorted(by_loc_date.items()):
+        # 1) DWD observation (has all variables)
+        dwd_row = next((r for r in date_rows if r['provider'] == 'dwd'), None)
+        if dwd_row is not None:
+            gt_values[(lid, dt)] = {var: dwd_row.get(var) for var in _VAR_ORDER}
+            continue
+        # 2) median of latest forecasts per variable
+        latest: dict[str, dict] = {}
+        for r in date_rows:
+            if r['provider'] in _OBSERVATION_PROVIDERS:
+                continue
+            p = r['provider']
+            if p not in latest or r['fetched_at'] > latest[p]['fetched_at']:
+                latest[p] = r
+        if not latest:
+            continue
+        row_vals: dict[str, float | None] = {}
+        for var in _VAR_ORDER:
+            vals = [r.get(var) for r in latest.values() if r.get(var) is not None]
+            if len(vals) >= 2:
+                row_vals[var] = statistics.median(vals)
+            elif len(vals) == 1:
+                row_vals[var] = vals[0]
+        if row_vals:
+            gt_values[(lid, dt)] = row_vals
+
+    if not gt_values:
+        return jsonify({'results': {}, 'warning': 'Could not determine ground truth.'})
+
+    # ── compute traces per variable ─────────────────────────────────────────
+    provider_labels = {p.name: p.display_name for p in providers.all_providers()}
+    provider_labels['median'] = 'Median'
+    colors = _load_provider_colors()
+
+    results: dict[str, dict] = {}
+    for var in _VAR_ORDER:
+        tr = _eval_var_traces(forecast_rows, gt_values, var, selected,
+                              provider_labels, colors)
+        rmse = tr.get('rmse', [])
+        bias = tr.get('bias', [])
+        if rmse or bias:
+            results[var] = {}
+            if rmse:
+                results[var]['rmse'] = {'traces': rmse}
+            if bias:
+                results[var]['bias'] = {'traces': bias}
+
+    # ── ground truth description ────────────────────────────────────────────
+    dwd_loc_dates = {(r['_loc_id'], r['forecast_time'][:10]) for r in dwd_rows}
+    gt_dwd   = sum(1 for k in gt_values if k in dwd_loc_dates)
+    gt_total = len(gt_values)
+    n_locs   = len(location_ids)
+    if gt_dwd:
+        if gt_dwd == gt_total:
+            gt_src = 'DWD weather station observations'
+        else:
+            gt_src = f'DWD ({gt_dwd}/{gt_total} location-days) + median forecast'
+    else:
+        gt_src = 'Median of latest forecasts (no weather station)'
+    if n_locs > 1:
+        gt_src += f' · {n_locs} locations'
+
+    return jsonify({
+        'results': results,
+        'ground_truth_source': gt_src,
+        'has_dwd_data': bool(dwd_rows),
+        'n_dates': gt_total,
+        'n_locations': n_locs,
+        'provider_labels': provider_labels,
+        'provider_colors': colors,
+        'var_labels': _VAR_LABELS,
+    })
+
+
 @app.route('/api/location/<int:location_id>/evolution')
 def api_evolution(location_id):
     location = db.get_location(location_id)
@@ -889,11 +1131,15 @@ def settings_page():
     db_clear_url   = _db_url(db_page=0) if db_filters else None
 
     server_tz = datetime.now().astimezone().tzname()
+    today_iso = _date.today().isoformat()
+    year_ago_iso = (_date.today() - timedelta(days=365)).isoformat()
 
     return render_template(
         'settings.html',
         tab=tab,
         server_tz=server_tz,
+        today_iso=today_iso,
+        year_ago_iso=year_ago_iso,
         all_settings=all_settings,
         all_locations=all_locations,
         location_sources=location_sources,

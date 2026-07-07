@@ -221,6 +221,7 @@
       ('locations', 'Locations'),
       ('database',  'Database'),
       ('logs',      'Logs'),
+      ('evaluation','Evaluation'),
     ] %}
     {% for slug, label in tabs %}
     <a href="{{ url_for('settings_page', tab=slug) }}"
@@ -572,6 +573,82 @@
       <span id="log-status"></span>
     </div>
     <div id="log-output"></div>
+
+    {# ════════════════════════════════════════ EVALUATION ═══════════════════ #}
+    {% elif tab == 'evaluation' %}
+    <style>
+      .eval-filters { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end; margin-bottom: 1.25rem; }
+      .eval-fgroup { display: flex; flex-direction: column; gap: .2rem; }
+      .eval-fgroup label { font-size: .7rem; color: var(--muted); text-transform: uppercase; font-weight: 700; letter-spacing: .04em; }
+      .eval-fgroup select, .eval-fgroup input {
+        padding: .4rem .6rem; border: 1px solid var(--border); border-radius: 6px;
+        font-size: .85rem; background: var(--surface); color: var(--text);
+      }
+      .eval-fgroup select:focus, .eval-fgroup input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(26,111,181,.12); }
+      .eval-providers { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .85rem; }
+      .eval-prov-item { display: flex; align-items: center; gap: .4rem; font-size: .85rem; cursor: pointer; user-select: none; }
+      .eval-prov-item input { accent-color: var(--primary); }
+      .eval-prov-swatch { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; border: 1px solid rgba(0,0,0,.15); }
+      .eval-gt-badge { display: inline-flex; align-items: center; gap: .4rem; padding: .3rem .7rem; border-radius: 6px; font-size: .78rem; font-weight: 600; margin-bottom: 1rem; }
+      .eval-gt-dwd { background: #dbeafe; color: #1e40af; }
+      .eval-gt-med { background: #fef3c7; color: #92400e; }
+      .eval-empty { text-align: center; padding: 3rem 1rem; color: var(--muted); font-size: .9rem; }
+      .eval-loading { text-align: center; padding: 3rem 1rem; color: var(--muted); }
+      .eval-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+      .eval-grid .eval-var-label { grid-column: 1 / -1; font-size:.9rem; font-weight:600; color:var(--text); margin-top:.5rem; }
+      .eval-grid .eval-chart { min-height:320px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); }
+    </style>
+
+    <h2>Retrospective Evaluation</h2>
+    <p style="font-size:.82rem; color:var(--muted); margin-bottom:1.25rem;">
+      Forecast accuracy vs. lead time — using
+      {% if all_locations %}
+      DWD observations as ground truth when available, otherwise the median of the latest forecasts.
+      {% else %}
+      ground truth from DWD observations or median of latest forecasts.
+      {% endif %}
+    </p>
+
+    {% if not all_locations %}
+    <div class="empty-state"><p>No locations yet.</p></div>
+    {% else %}
+
+    {# ── filters ── #}
+    <div class="eval-filters">
+      <div class="eval-fgroup">
+        <label>Location</label>
+        <select id="eval-location" onchange="evalLoadProviders()">
+          <option value="all" selected>All locations</option>
+          {% for loc in all_locations %}
+          <option value="{{ loc.id }}">{{ loc.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="eval-fgroup">
+        <label>From</label>
+        <input type="date" id="eval-date-start" value="{{ year_ago_iso }}">
+      </div>
+      <div class="eval-fgroup">
+        <label>To</label>
+        <input type="date" id="eval-date-end" value="{{ today_iso }}">
+      </div>
+      <button class="btn btn-primary" onclick="evalUpdate()">Update</button>
+    </div>
+
+    {# ── provider checkboxes ── #}
+    <div class="eval-providers" id="eval-providers"></div>
+
+    {# ── ground truth badge ── #}
+    <div id="eval-gt-badge" class="eval-gt-badge eval-gt-med" style="display:none;"></div>
+
+    {# ── charts (two-column grid) ── #}
+    <div class="eval-grid" id="eval-grid">
+      <div class="eval-col-header" style="font-weight:600;font-size:.85rem;">RMSE</div>
+      <div class="eval-col-header" style="font-weight:600;font-size:.85rem;">Bias (ME)</div>
+    </div>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+    {% endif %}
     {% endif %}
 
   </div>{# /st-section #}
@@ -774,6 +851,145 @@ function switchFile(file) {
 }
 
 switchFile('app');
+{% endif %}
+
+{% if tab == 'evaluation' %}
+// ── evaluation (two-column layout: RMSE | Bias) ─────────────────────────────
+const evalGrid    = document.getElementById('eval-grid');
+const evalGtBadge = document.getElementById('eval-gt-badge');
+const evalProvDiv = document.getElementById('eval-providers');
+
+// First two children are column headers, keep them
+function evalClearGrid() {
+  while (evalGrid.children.length > 2) evalGrid.lastChild.remove();
+}
+
+function evalStatus(msg) {
+  evalClearGrid();
+  const div = document.createElement('div');
+  div.className = 'eval-empty';
+  div.style.gridColumn = '1 / -1';
+  div.textContent = msg;
+  evalGrid.appendChild(div);
+}
+
+function evalLoadProviders() {
+  const locId = document.getElementById('eval-location').value;
+  if (!locId) return;
+  const labels = {{ provider_labels | tojson }};
+  const forecastProvs = Object.keys(labels).filter(p => p !== 'dwd');
+  let providers;
+  if (locId === 'all') {
+    providers = forecastProvs;
+  } else {
+    const srcs = {{ location_sources | tojson }};
+    providers = (srcs[locId] || [])
+      .filter(s => s.provider !== 'dwd')
+      .map(s => s.provider);
+  }
+  evalProvDiv.innerHTML = '';
+  for (const p of providers) {
+    const label = labels[p] || p;
+    const chk = document.createElement('label');
+    chk.className = 'eval-prov-item';
+    chk.innerHTML = `<input type="checkbox" checked data-prov="${p}">
+      <span class="eval-prov-swatch" style="background:#a855f7"></span> ${label}`;
+    chk.querySelector('input').addEventListener('change', evalUpdate);
+    evalProvDiv.appendChild(chk);
+  }
+  const med = document.createElement('label');
+  med.className = 'eval-prov-item';
+  med.innerHTML = `<input type="checkbox" checked disabled data-prov="median">
+    <span class="eval-prov-swatch" style="background:#111827"></span> Median (always)`;
+  evalProvDiv.appendChild(med);
+  evalUpdate();
+}
+
+function evalGetSelectedProviders() {
+  const checks = evalProvDiv.querySelectorAll('input[data-prov]:not([disabled])');
+  return Array.from(checks).filter(c => c.checked).map(c => c.dataset.prov);
+}
+
+async function evalUpdate() {
+  const locId = document.getElementById('eval-location').value;
+  if (!locId) return evalStatus('Select a location.');
+  const ds = document.getElementById('eval-date-start').value;
+  const de = document.getElementById('eval-date-end').value;
+  const providers = evalGetSelectedProviders();
+
+  evalClearGrid();
+  const spinner = document.createElement('div');
+  spinner.className = 'eval-loading';
+  spinner.style.gridColumn = '1 / -1';
+  spinner.innerHTML = '<span class="spinner"></span> Loading…';
+  evalGrid.appendChild(spinner);
+
+  let url = `/api/evaluation?location_id=${locId}&date_start=${ds}&date_end=${de}`;
+  for (const p of providers) url += '&providers=' + encodeURIComponent(p);
+
+  try {
+    const r = await fetch(url);
+    const data = await r.json();
+    if (data.warning) { evalStatus(data.warning); return; }
+    if (!data.results || !Object.keys(data.results).length) {
+      evalStatus('No data for the selected filters.');
+      return;
+    }
+
+    // Ground truth badge
+    const src = data.ground_truth_source || '';
+    const isDwd = src.includes('DWD');
+    evalGtBadge.style.display = 'inline-flex';
+    evalGtBadge.className = 'eval-gt-badge ' + (isDwd ? 'eval-gt-dwd' : 'eval-gt-med');
+    evalGtBadge.innerHTML = (isDwd ? '&#x1F4CA; ' : '&#x26A0; ') + src + ' &middot; ' + data.n_dates + ' location-days';
+
+    // Update swatch colors
+    if (data.provider_colors) {
+      evalProvDiv.querySelectorAll('input[data-prov]').forEach(inp => {
+        const p = inp.dataset.prov;
+        if (data.provider_colors[p]) {
+          const swatch = inp.parentElement.querySelector('.eval-prov-swatch');
+          if (swatch) swatch.style.background = data.provider_colors[p];
+        }
+      });
+    }
+
+    // Render two charts per variable (RMSE | Bias)
+    evalClearGrid();
+    const varLabels = data.var_labels || {};
+
+    for (const [varName, result] of Object.entries(data.results)) {
+      const label = document.createElement('div');
+      label.className = 'eval-var-label';
+      label.textContent = varLabels[varName] || varName;
+      evalGrid.appendChild(label);
+
+      for (const metric of ['rmse', 'bias']) {
+        const traces = (result[metric] && result[metric].traces) || [];
+        const chartDiv = document.createElement('div');
+        chartDiv.className = 'eval-chart';
+        evalGrid.appendChild(chartDiv);
+        if (!traces.length) continue;
+        const yTitle = metric === 'rmse' ? 'RMSE' : 'Bias';
+        Plotly.newPlot(chartDiv, traces, {
+          dragmode: 'zoom',
+          hovermode: 'closest',
+          xaxis: { title: 'Days', dtick: 1, range: [0, 16] },
+          yaxis: { title: yTitle },
+          margin: { l: 50, r: 12, t: 4, b: 42 },
+          font: { size: 10 },
+          showlegend: false,
+        }, { responsive: true, displayModeBar: false });
+      }
+    }
+  } catch (e) {
+    evalStatus('Error loading evaluation data.');
+  }
+}
+
+if (document.getElementById('eval-location')) {
+  evalLoadProviders();
+}
 {% endif %}
 </script>
 {% endblock %}
