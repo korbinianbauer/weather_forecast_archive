@@ -319,16 +319,21 @@
       <a href="{{ url_for('index') }}?add=1" class="btn btn-outline btn-sm" style="margin-left:auto;">Add location</a>
     </div>
     {% if regular_locations %}
-    <div class="loc-list" id="locList" style="max-width:620px;">
-      {% for loc in regular_locations %}
-      {% set srcs = location_sources.get(loc.id, []) %}
-      {% set avail = available_providers_by_loc.get(loc.id, []) %}
-      {% include "_location_item.html" %}
-      {% endfor %}
-    </div>
-    <div style="font-size:.78rem; color:var(--muted); margin-top:.75rem;">
-      Drag rows to reorder. Order is saved automatically.
-    </div>
+    <details style="margin-top:.5rem;margin-bottom:1rem;">
+      <summary style="cursor:pointer; font-weight:600; font-size:1rem; padding:.4rem 0;">
+        Locations ({{ regular_locations|length }})
+      </summary>
+      <div class="loc-list" id="locList" style="max-width:620px; margin-top:.75rem;">
+        {% for loc in regular_locations %}
+        {% set srcs = location_sources.get(loc.id, []) %}
+        {% set avail = available_providers_by_loc.get(loc.id, []) %}
+        {% include "_location_item.html" %}
+        {% endfor %}
+      </div>
+      <div style="font-size:.78rem; color:var(--muted); margin-top:.5rem;">
+        Drag rows to reorder. Order is saved automatically.
+      </div>
+    </details>
     {% elif not dwd_locations %}
     <div class="empty-state">
       <p>No locations yet. <a href="{{ url_for('index') }}?add=1">Add one →</a></p>
