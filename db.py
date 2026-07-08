@@ -581,6 +581,23 @@ def get_existing_forecast_times(location_id: int, provider: str) -> set[tuple[st
         )}
 
 
+def get_unobserved_forecast_dates(location_id: int, observation_provider: str) -> set[str]:
+    """Forecast dates that lack observation data from *observation_provider*."""
+    with get_db() as conn:
+        return {r[0] for r in conn.execute(
+            '''SELECT DISTINCT date(f.forecast_time)
+               FROM forecast_snapshots f
+               WHERE f.location_id = ? AND f.provider != ?
+               AND NOT EXISTS (
+                 SELECT 1 FROM forecast_snapshots o
+                 WHERE o.location_id = f.location_id
+                   AND o.provider = ?
+                   AND date(o.forecast_time) = date(f.forecast_time)
+               )''',
+            (location_id, observation_provider, observation_provider),
+        )}
+
+
 def get_imported_dwd_ids() -> set[str]:
     """Return set of all DWD station IDs used by any location source
     (bulk-imported or manually attached)."""

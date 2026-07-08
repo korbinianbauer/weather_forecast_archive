@@ -286,6 +286,7 @@ def index():
         first_provider = next(
             (s['provider'] for s in sources if s['provider'] not in _OBSERVATION_PROVIDERS),
             sources[0]['provider'] if sources else None)
+        has_dwd = any(s['provider'] == 'dwd' for s in sources)
         location_data.append({
             'location': loc,
             'all_dates': window_dates,
@@ -294,6 +295,7 @@ def index():
             'pressure_range': db.get_metric_range(loc['id'], 'pressure'),
             'current': _current_weather(loc['id'], first_provider) if first_provider else None,
             'current_provider': first_provider,
+            'has_dwd': has_dwd,
         })
 
     r = make_response(render_template(
@@ -793,6 +795,14 @@ def api_evaluation():
         if not locations:
             return jsonify({'results': {}, 'warning': 'No locations.'})
         location_ids = [loc['id'] for loc in locations]
+    elif location_param == 'all_dwd':
+        locations = db.get_locations(show_hidden=True)
+        location_ids = [
+            loc['id'] for loc in locations
+            if any(s['provider'] == 'dwd' for s in db.get_location_sources(loc['id']))
+        ]
+        if not location_ids:
+            return jsonify({'results': {}, 'warning': 'No locations with DWD source.'})
     else:
         try:
             loc_id = int(location_param)

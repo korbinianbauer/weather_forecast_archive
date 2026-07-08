@@ -616,6 +616,8 @@
         <label>Location</label>
         <select id="eval-location" onchange="evalLoadProviders()">
           <option value="all" selected>All locations</option>
+          <option value="all_dwd">All DWD locations</option>
+          <option disabled>&mdash;&mdash;&mdash;</option>
           {% for loc in all_locations %}
           <option value="{{ loc.id }}">{{ loc.name }}</option>
           {% endfor %}
@@ -896,7 +898,7 @@ function evalLoadProviders() {
   const labels = {{ provider_labels | tojson }};
   const forecastProvs = Object.keys(labels).filter(p => p !== 'dwd');
   let providers;
-  if (locId === 'all') {
+  if (locId === 'all' || locId === 'all_dwd') {
     providers = forecastProvs;
   } else {
     const srcs = {{ location_sources | tojson }};

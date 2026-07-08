@@ -185,10 +185,13 @@ class DwdProvider(WeatherProvider):
     def fetch_daily(self, provider_location_id: str, extra: dict) -> list[ForecastEntry]:
         sid = provider_location_id.zfill(5)
         rows = _read_zip_product(f'{_BASE}/daily/kl/recent/tageswerte_KL_{sid}_akt.zip')
+        relevant = extra.get('_relevant_dates')
         entries = []
         for row in rows:
             d = row.get('MESS_DATUM', '')
             if len(d) != 8:
+                continue
+            if relevant is not None and f'{d[:4]}-{d[4:6]}-{d[6:8]}' not in relevant:
                 continue
             fm = _fval(row, 'FM')       # daily mean wind, m/s
             nm = _fval(row, 'NM')       # daily mean cloud cover, octas
@@ -215,11 +218,18 @@ class DwdProvider(WeatherProvider):
 
     def fetch_hourly(self, provider_location_id: str, extra: dict) -> list[ForecastEntry]:
         sid = provider_location_id.zfill(5)
+        relevant = extra.get('_relevant_dates')
         merged: dict[str, dict] = {}
 
         def slot(row) -> Optional[dict]:
             ts = row.get('MESS_DATUM', '')
-            return merged.setdefault(ts[:10], {}) if len(ts) >= 10 else None
+            if len(ts) < 10:
+                return None
+            if relevant is not None:
+                d = f'{ts[:4]}-{ts[4:6]}-{ts[6:8]}'
+                if d not in relevant:
+                    return None
+            return merged.setdefault(ts[:10], {})
 
         for directory, code in _HOURLY_SOURCES:
             url = f'{_BASE}/hourly/{directory}/recent/stundenwerte_{code}_{sid}_akt.zip'

@@ -13,20 +13,23 @@ def _poll_source(location_id: int, source: dict):
     meta = source['metadata']
     fetched_at = datetime.utcnow().isoformat()
 
+    # For observation providers, check what's needed before fetching.
+    if getattr(provider, 'is_observation', False):
+        needed = db.get_unobserved_forecast_dates(location_id, provider.name)
+        if not needed:
+            logger.info('Location %d via %s: all observation data already archived',
+                        location_id, provider.name)
+            return
+        meta = dict(meta, _relevant_dates=needed)
+
     entries = provider.fetch_all(plid, meta)
     if not entries:
         logger.warning('No data returned for location %d via %s', location_id, provider.name)
         return
 
     if getattr(provider, 'is_observation', False):
-        # Observations are immutable: only archive forecast_times not stored yet.
         existing = db.get_existing_forecast_times(location_id, provider.name)
-        skipped = len(entries)
         entries = [e for e in entries if (e.granularity, e.forecast_time) not in existing]
-        skipped -= len(entries)
-        if skipped:
-            logger.info('Location %d via %s: %d entries already archived',
-                        location_id, provider.name, skipped)
         if not entries:
             return
 
