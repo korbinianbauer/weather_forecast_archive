@@ -958,6 +958,38 @@ def api_evolution(location_id):
     })
 
 
+@app.route('/api/location/<int:location_id>/grid-data')
+def api_grid_data(location_id):
+    """Return grid/plot data for a location as JSON (replaces __loc data)."""
+    try:
+        start_dt = _date.fromisoformat(request.args['start'])
+    except (KeyError, ValueError):
+        return jsonify({'error': 'start date required (YYYY-MM-DD)'}), 400
+    dates = [(start_dt + timedelta(days=i)).isoformat() for i in range(16)]
+    loc = db.get_location(location_id)
+    if not loc:
+        return jsonify({'error': 'not found'}), 404
+    sources = db.get_location_sources(location_id)
+    provider_labels = {p.name: p.display_name for p in providers.all_providers()}
+    rows = []
+    for source in sources:
+        entries = db.get_latest_forecast_per_date(
+            location_id, source['provider'], dates[0], dates[-1])
+        by_date = {e['forecast_time'][:10]: e for e in entries}
+        rows.append({
+            'provider': source['provider'],
+            'enabled': source.get('enabled', 1),
+            'fetched_at': max((e['fetched_at'] for e in entries), default=None),
+            'label': provider_labels.get(source['provider'], source['provider']),
+            'byDate': by_date,
+        })
+    return jsonify({
+        'dates': dates,
+        'rows': rows,
+        'pressureRange': db.get_metric_range(location_id, 'pressure'),
+    })
+
+
 @app.route('/location/<int:location_id>/add_source', methods=['POST'])
 @login_required
 @csrf_protect

@@ -27,11 +27,11 @@
     padding: .35rem .15rem; text-align: center;
     background: var(--surface); overflow: hidden; min-width: 0;
   }
-  div.day-cell { cursor: pointer; }
+  div.day-cell { cursor: pointer; min-height: 85px; }
   div.day-cell[data-dow="sat"] { background: rgba(255,200,100,0.075); }
-  div.day-cell[data-dow="sun"] { background: rgba(255,150,50,0.125); }
-  div.day-cell.day-today { border-top: 3px solid #ef4444; }
-  div.day-cell.day-today.evo-dimmed { border-top-color: #fca5a5; }
+  div.day-cell[data-dow="sun"] { background: rgba(255,150,100,0.125); }
+  div.day-cell.day-today { outline: 3px solid #ef4444; outline-offset: -2px; }
+  div.day-cell.day-today.evo-dimmed { outline-color: #fca5a5; }
   div.day-cell.col-hover { border-color: var(--primary); background: #eff6ff; }
   div.day-cell.evo-active { border-color: var(--primary); background: #dbeafe; outline: 2px solid var(--primary); outline-offset: -2px; }
   div.day-cell.evo-dimmed { opacity: 0.3; }
@@ -216,16 +216,14 @@
               <img class="dc-icon" src="{{ e.icon_url }}" alt="{{ e.condition_text or '' }}"
                    onerror="this.style.display='none'" title="{{ e.condition_text or '' }}">
               {% else %}
-              <div style="height:34px;"></div>
+              <div style="height:30px; margin:.2rem auto;"></div>
               {% endif %}
               <div class="dc-temps">
                 {% if e.temp_max is not none %}<span class="dc-max">{{ e.temp_max }}°</span>{% endif %}
                 {% if e.temp_min is not none %}<span class="dc-min">/{{ e.temp_min }}°</span>{% endif %}
                 {% if e.temp_max is none and e.temp_min is none %}—{% endif %}
               </div>
-              {% if e.precip_probability is not none %}
-              <div class="dc-precip">💧{{ e.precip_probability }}%</div>
-              {% endif %}
+              <div class="dc-precip">{% if e.precip_probability is not none %}💧{{ e.precip_probability }}%{% else %}&nbsp;{% endif %}</div>
             </div>
             {% else %}
             <div class="day-cell"
@@ -233,9 +231,10 @@
                  onclick="openEvolution({{ loc.id }}, '{{ d }}')"
                  title="No data for {{ d }}">
               <div class="dc-date">{{ d[8:] }}.{{ d[5:7] }}.</div>
-              <div style="height:34px; display:flex; align-items:center; justify-content:center;
+              <div style="height:30px; margin:.2rem auto; display:flex; align-items:center; justify-content:center;
                           font-size:1rem; color:var(--border);">—</div>
               <div class="dc-temps" style="color:var(--muted);">—</div>
+              <div class="dc-precip">&nbsp;</div>
             </div>
             {% endif %}
             {% endfor %}
@@ -271,6 +270,8 @@
       {
         provider: {{ row.provider | tojson }},
         label: {{ provider_labels.get(row.provider, row.provider) | tojson }},
+        enabled: {{ (row.get('enabled', 1) | default(1)) | tojson }},
+        fetched_at: {{ row.fetched_at | tojson }},
         byDate: {{ row.by_date | tojson }}
       }{% if not loop.last %},{% endif %}
       {% endfor %}
@@ -465,6 +466,11 @@ function injectFormFields() {
 const PROVIDER_COLORS = window.PROVIDER_COLORS;
 const DEFAULT_COLOR   = window.DEFAULT_COLOR;
 const plotRendered = {};
+
+function escHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 
 function rgba(provider, a) {
   const c = PROVIDER_COLORS[provider] || DEFAULT_COLOR;
@@ -992,6 +998,98 @@ function buildMedianRow(rows, dates) {
   return { provider: 'median', label: 'Median', byDate };
 }
 
+function renderGrid(locId) {
+  const loc = window.__loc[locId];
+  if (!loc) return;
+  const container = document.getElementById('rows-' + locId);
+  if (!container) return;
+  // Lock to tallest observed height so the card never shrinks
+  if (window._gridBaseHeight?.[locId]) {
+    container.style.minHeight = window._gridBaseHeight[locId] + 'px';
+  }
+  const dates = loc.dates;
+  const n = dates.length;
+  let html = '';
+  if (dates.length) {
+    for (const row of loc.rows) {
+      if (row.provider === 'dwd') continue;
+      html += '<div class="provider-row">';
+      html += '<div class="provider-label">' + escHtml(row.label);
+      if (row.fetched_at) {
+        html += ' <span class="fetched">polled <time class="local-time" datetime="' + row.fetched_at + '">' + row.fetched_at + '</time></span>';
+      }
+      if (row.enabled === 0 || row.enabled === false) {
+        html += ' <span class="fetched">(disabled)</span>';
+      }
+      html += '</div>';
+      html += '<div class="day-grid" style="grid-template-columns: repeat(' + n + ', minmax(0, 1fr));">';
+      for (const d of dates) {
+        const e = row.byDate ? row.byDate[d] : null;
+        const dd = d.slice(8) + '.' + d.slice(5, 7) + '.';
+        const openEvo = 'onclick="openEvolution(' + locId + ', \'' + d + '\')"';
+        if (e) {
+          html += '<div class="day-cell" data-loc="' + locId + '" data-date="' + d + '" data-provider="' + row.provider + '" ' + openEvo + ' title="View forecast evolution for ' + d + '">';
+          html += '<div class="dc-date">' + dd + '</div>';
+          if (e.icon_url) {
+            html += '<img class="dc-icon" src="' + escHtml(e.icon_url) + '" alt="' + escHtml(e.condition_text || '') + '" onerror="this.style.display=\'none\'" title="' + escHtml(e.condition_text || '') + '">';
+          } else {
+            html += '<div style="height:30px;margin:.2rem auto;"></div>';
+          }
+          html += '<div class="dc-temps">';
+          if (e.temp_max != null) html += '<span class="dc-max">' + e.temp_max + '°</span>';
+          if (e.temp_min != null) html += '<span class="dc-min">/' + e.temp_min + '°</span>';
+          if (e.temp_max == null && e.temp_min == null) html += '—';
+          html += '</div>';
+          html += '<div class="dc-precip">' + (e.precip_probability != null ? '💧' + e.precip_probability + '%' : '\u00A0') + '</div>';
+          html += '</div>';
+        } else {
+          html += '<div class="day-cell" data-loc="' + locId + '" data-date="' + d + '" data-provider="' + row.provider + '" ' + openEvo + ' title="No data for ' + d + '">';
+          html += '<div class="dc-date">' + dd + '</div>';
+          html += '<div style="height:30px;margin:.2rem auto;display:flex;align-items:center;justify-content:center;font-size:1rem;color:var(--border);">—</div>';
+          html += '<div class="dc-temps" style="color:var(--muted);">—</div>';
+          html += '<div class="dc-precip">\u00A0</div>';
+          html += '</div>';
+        }
+      }
+      html += '</div></div>';
+    }
+  } else {
+    html = '<div style="color:var(--muted); font-size:.875rem; padding:.5rem 0;">No forecast data yet.</div>';
+  }
+  container.innerHTML = html;
+  // Re-apply per-cell initializations (weekend, today, column hover)
+  container.querySelectorAll('.day-cell[data-date]').forEach(cell => {
+    const { loc: cloc, date } = cell.dataset;
+    if (!date) return;
+    const [y, m, d] = date.split('-').map(Number);
+    const dow = new Date(y, m - 1, d).getDay();
+    if (dow === 6) cell.dataset.dow = 'sat';
+    else if (dow === 0) cell.dataset.dow = 'sun';
+    if (date === _todayStr) cell.classList.add('day-today');
+    cell.addEventListener('mouseenter', () => {
+      clearTimeout(_colHoverTimer[cloc]);
+      _applyColHover(cloc, date);
+    });
+    cell.addEventListener('mouseleave', () => {
+      _colHoverTimer[cloc] = setTimeout(() => _removeColHover(cloc, date), 80);
+    });
+  });
+  // Ratchet: propagate new height to ALL cards so empty ones stay in sync
+  requestAnimationFrame(() => {
+    const h = container.scrollHeight;
+    const bh = window._gridBaseHeight;
+    if (!bh) return;
+    if (h > bh[locId]) {
+      Object.keys(bh).forEach(id => { bh[id] = h; });
+      Object.keys(bh).forEach(id => {
+        const el = document.getElementById('rows-' + id);
+        if (el) el.style.minHeight = h + 'px';
+      });
+    }
+    container.style.minHeight = bh[locId] + 'px';
+  });
+}
+
 function renderPlot(locId) {
   const loc = window.__loc[locId];
   if (!loc) return;
@@ -1194,11 +1292,66 @@ function buildTempTraces(rows, dates) {
 }
 
 // ── date navigation (inside the open detail card) ───────────────────────────
-const _dateStart = {{ date_start | tojson }};
+let _dateStart = {{ date_start | tojson }};
 
 function navStartTo(dateStr, locId) {
   if (!dateStr) return;
-  location.href = '?start=' + encodeURIComponent(dateStr) + '#loc-' + locId;
+  const _origScrollY = window.scrollY;
+  _dateStart = dateStr;
+  fetch('/api/location/' + locId + '/grid-data?start=' + encodeURIComponent(dateStr))
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(data => {
+      if (!window.__loc[locId]) window.__loc[locId] = {};
+      window.__loc[locId].dates = data.dates;
+      window.__loc[locId].pressureRange = data.pressureRange;
+      window.__loc[locId].rows = data.rows;
+
+      // Update all date inputs and end-date spans across every card
+      const endD = new Date(data.dates[data.dates.length - 1]);
+      const endStr = String(endD.getDate()).padStart(2, '0') + '.' + String(endD.getMonth() + 1).padStart(2, '0') + '.' + endD.getFullYear();
+      document.querySelectorAll('.date-nav input[type="date"]').forEach(inp => { inp.value = dateStr; });
+      document.querySelectorAll('.date-nav > span:not(.date-nav-group)').forEach(span => {
+        span.textContent = '– ' + endStr;
+      });
+
+      renderGrid(locId);
+
+      // Re-render forecast plot if visible
+      if (document.getElementById('plot-' + locId)?.classList.contains('visible')) {
+        const ce = document.getElementById('plot-charts-' + locId);
+        ce.innerHTML = '';
+        delete plotRendered[locId];
+        renderPlot(locId);
+        plotRendered[locId] = true;
+      }
+
+      // Re-fetch evolution data if evolution is open
+      const evo = evoState[locId];
+      if (evo) {
+        const ce = document.getElementById('evo-charts-' + locId);
+        if (ce) {
+          ce.innerHTML = '<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">Updating…</div>';
+          fetch('/api/location/' + locId + '/evolution?date=' + encodeURIComponent(evo.date) + '&mode=' + evo.mode)
+            .then(r => r.json())
+            .then(d2 => {
+              const cur = evoState[locId];
+              if (!cur || cur.date !== evo.date || cur.mode !== evo.mode) return;
+              renderEvolutionInline(locId, d2);
+              setTimeout(() => drawEvolutionConnector(locId), 120);
+              requestAnimationFrame(() => window.scrollTo(0, _origScrollY));
+            })
+            .catch(() => {
+              ce.innerHTML = '<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">Failed to load evolution data.</div>';
+            });
+        }
+      }
+
+      requestAnimationFrame(() => window.scrollTo(0, _origScrollY));
+    })
+    .catch(e => {
+      console.error('Grid data fetch failed, reloading page:', e);
+      location.href = '?start=' + encodeURIComponent(dateStr) + '#loc-' + locId;
+    });
 }
 
 function navShift(days, months, locId) {
@@ -1290,6 +1443,23 @@ document.querySelectorAll('.day-cell[data-date]:not(.empty)').forEach(cell => {
     _colHoverTimer[loc] = setTimeout(() => _removeColHover(loc, date), 80);
   });
 });
+// Stabilize grid container height — all cards share the tallest height
+{
+  const _base = {};
+  window._gridBaseHeight = _base;
+  const hs = [];
+  document.querySelectorAll('[id^="rows-"]').forEach(el => {
+    const id = el.id.replace('rows-', '');
+    if (id) { hs.push(el.scrollHeight); _base[id] = el.scrollHeight; }
+  });
+  const maxH = Math.max(...hs, 0);
+  Object.keys(_base).forEach(id => { _base[id] = maxH; });
+  Object.keys(_base).forEach(id => {
+    const el = document.getElementById('rows-' + id);
+    if (el) el.style.minHeight = maxH + 'px';
+  });
+}
+
 {% set _polling = polling_location_ids %}
 {% if _polling %}
 (async function () {
