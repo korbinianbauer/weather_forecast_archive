@@ -186,12 +186,12 @@ def _load_provider_colors() -> dict[str, str]:
         colors = json.loads(db.get_setting('provider_colors', '{}'))
     except json.JSONDecodeError:
         colors = {}
-    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'median': '#111827', 'dwd': '#dc2626'}
+    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'average': '#8b5cf6', 'median': '#111827', 'dwd': '#dc2626'}
     return {**defaults, **colors}
 
 
 # Providers delivering measured ground truth instead of forecasts (e.g. DWD).
-# They are excluded from the forecast median and drawn specially in the plots.
+# They are excluded from the forecast average/median and drawn specially in the plots.
 _OBSERVATION_PROVIDERS = {p.name for p in providers.all_providers()
                           if getattr(p, 'is_observation', False)}
 
@@ -427,6 +427,16 @@ def _median_entry(entries: list[dict]) -> dict:
     return out
 
 
+def _average_entry(entries: list[dict]) -> dict:
+    """Field-wise mean over one entry per provider; only fields with ≥2 values."""
+    out = {}
+    for field in _MEDIAN_FIELDS:
+        vals = [e.get(field) for e in entries if e.get(field) is not None]
+        if len(vals) >= 2:
+            out[field] = round(statistics.mean(vals), 1)
+    return out
+
+
 def _median_evolution_rows(rows: list[dict]) -> list[dict]:
     """Synthesize 'median' pseudo-provider rows for the daily evolution plot.
 
@@ -458,6 +468,37 @@ def _median_evolution_rows(rows: list[dict]) -> list[dict]:
                 'granularity': 'daily',
                 'fetched_at': max(r['fetched_at'] for r in latest_per_provider.values()),
                 **med,
+            })
+    return result
+
+
+def _average_evolution_rows(rows: list[dict]) -> list[dict]:
+    """Synthesize 'average' pseudo-provider rows for the daily evolution plot."""
+    rows = [r for r in rows if r['provider'] not in _OBSERVATION_PROVIDERS]
+    if len({r['provider'] for r in rows}) < 2:
+        return []
+
+    clusters: list[list[dict]] = []
+    prev_ts = None
+    for r in sorted(rows, key=lambda r: r['fetched_at']):
+        ts = datetime.fromisoformat(r['fetched_at'])
+        if prev_ts is None or (ts - prev_ts).total_seconds() > 1800:
+            clusters.append([])
+        clusters[-1].append(r)
+        prev_ts = ts
+
+    result = []
+    for cluster in clusters:
+        latest_per_provider = {r['provider']: r for r in cluster}
+        if len(latest_per_provider) < 2:
+            continue
+        avg = _average_entry(list(latest_per_provider.values()))
+        if avg:
+            result.append({
+                'provider': 'average',
+                'granularity': 'daily',
+                'fetched_at': max(r['fetched_at'] for r in latest_per_provider.values()),
+                **avg,
             })
     return result
 
@@ -619,7 +660,7 @@ def _build_hourly_traces(rows: list[dict], provider_labels: dict) -> list[dict]:
                     merged[e['forecast_time']] = e
             by_provider[p] = {max(by_provider[p]): [merged[t] for t in sorted(merged)]}
 
-    # Median pseudo-provider: one curve over the newest run of each forecast
+    # Pseudo-providers: one curve over the newest run of each forecast
     # provider, at forecast times where ≥2 providers have a value.
     forecast_providers = set(by_provider) - _OBSERVATION_PROVIDERS
     if len(forecast_providers) >= 2:
@@ -629,13 +670,20 @@ def _build_hourly_traces(rows: list[dict], provider_labels: dict) -> list[dict]:
         for p, fetched_at in newest_runs.items():
             for e in by_provider[p][fetched_at]:
                 by_time[e['forecast_time']].append(e)
+
         med_entries = []
+        avg_entries = []
         for t in sorted(by_time):
             med = _median_entry(by_time[t])
             if med:
                 med_entries.append({'forecast_time': t, **med})
+            avg = _average_entry(by_time[t])
+            if avg:
+                avg_entries.append({'forecast_time': t, **avg})
         if med_entries:
             by_provider['median'][max(newest_runs.values())] = med_entries
+        if avg_entries:
+            by_provider['average'][max(newest_runs.values())] = avg_entries
 
     provider_colors = _load_provider_colors()
     metrics = [('temperature', 'temperature')] + _SIMPLE_METRICS
@@ -743,6 +791,7 @@ def _eval_var_traces(
         med_collect[key][r['provider']] = fv
 
     med_err: dict[int, list[float]] = defaultdict(list)
+    avg_err: dict[int, list[float]] = defaultdict(list)
     for (lead, lid, dt), pv in med_collect.items():
         gt_val = gt_values.get((lid, dt), {}).get(variable)
         if gt_val is None:
@@ -750,6 +799,7 @@ def _eval_var_traces(
         vs = [v for v in pv.values() if v is not None]
         if len(vs) >= 2:
             med_err[lead].append(statistics.median(vs) - gt_val)
+            avg_err[lead].append(statistics.mean(vs) - gt_val)
 
     def _build(metric: str) -> list[dict]:
         traces: list[dict] = []
@@ -773,6 +823,20 @@ def _eval_var_traces(
                 'name': label,
                 'line': {'color': color, 'width': 2},
                 'marker': {'size': 6, 'color': color},
+            })
+        if len(avg_err) >= 2:
+            leads = sorted(avg_err)
+            if metric == 'rmse':
+                ys = [statistics.mean(v ** 2 for v in avg_err[l]) ** 0.5 for l in leads]
+            else:
+                ys = [statistics.mean(avg_err[l]) for l in leads]
+            ac = colors.get('average', '#8b5cf6')
+            traces.append({
+                'x': leads, 'y': ys,
+                'type': 'scatter', 'mode': 'lines+markers',
+                'name': 'Average',
+                'line': {'color': ac, 'width': 3},
+                'marker': {'size': 6, 'color': ac},
             })
         if len(med_err) >= 2:
             leads = sorted(med_err)
@@ -853,7 +917,7 @@ def api_evaluation():
         if dwd_row is not None:
             gt_values[(lid, dt)] = {var: dwd_row.get(var) for var in _VAR_ORDER}
             continue
-        # 2) median of latest forecasts per variable
+        # 2) average of latest forecasts per variable
         latest: dict[str, dict] = {}
         for r in date_rows:
             if r['provider'] in _OBSERVATION_PROVIDERS:
@@ -867,7 +931,7 @@ def api_evaluation():
         for var in _VAR_ORDER:
             vals = [r.get(var) for r in latest.values() if r.get(var) is not None]
             if len(vals) >= 2:
-                row_vals[var] = statistics.median(vals)
+                row_vals[var] = statistics.mean(vals)
             elif len(vals) == 1:
                 row_vals[var] = vals[0]
         if row_vals:
@@ -878,6 +942,7 @@ def api_evaluation():
 
     # ── compute traces per variable ─────────────────────────────────────────
     provider_labels = {p.name: p.display_name for p in providers.all_providers()}
+    provider_labels['average'] = 'Average'
     provider_labels['median'] = 'Median'
     colors = _load_provider_colors()
 
@@ -903,9 +968,9 @@ def api_evaluation():
         if gt_dwd == gt_total:
             gt_src = 'DWD weather station observations'
         else:
-            gt_src = f'DWD ({gt_dwd}/{gt_total} location-days) + median forecast'
+            gt_src = f'DWD ({gt_dwd}/{gt_total} location-days) + average forecast'
     else:
-        gt_src = 'Median of latest forecasts (no weather station)'
+        gt_src = 'Average of latest forecasts (no weather station)'
     if n_locs > 1:
         gt_src += f' · {n_locs} locations'
 
@@ -932,6 +997,7 @@ def api_evolution(location_id):
     sources = db.get_location_sources(location_id)
     all_provider_names = [s['provider'] for s in sources]
     provider_labels_map = {p.name: p.display_name for p in providers.all_providers()}
+    provider_labels_map['average'] = 'Average'
     provider_labels_map['median'] = 'Median'
     url_providers = request.args.getlist('providers')
     default_provider = url_providers[0] if len(url_providers) == 1 else None
@@ -941,10 +1007,12 @@ def api_evolution(location_id):
         traces = _build_hourly_traces(rows, provider_labels_map)
     else:
         rows = db.get_forecast_evolution(location_id, target_date, all_provider_names)
-        rows = rows + _median_evolution_rows(rows)
+        rows = rows + _average_evolution_rows(rows) + _median_evolution_rows(rows)
         traces = _build_evolution_traces(rows, provider_labels_map, target_date)
-    # Draw the median as a dashed line so it stands out as synthetic
+    # Style pseudo-providers: average solid, median dashed
     for t in traces:
+        if t.get('legendgroup') == 'Average' and t.get('line', {}).get('width'):
+            t['line']['width'] = 3
         if t.get('legendgroup') == 'Median' and t.get('line', {}).get('width'):
             t['line']['dash'] = 'dash'
     return jsonify({

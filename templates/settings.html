@@ -600,9 +600,9 @@
     <p style="font-size:.82rem; color:var(--muted); margin-bottom:1.25rem;">
       Forecast accuracy vs. lead time — using
       {% if all_locations %}
-      DWD observations as ground truth when available, otherwise the median of the latest forecasts.
+      DWD observations as ground truth when available, otherwise the average of the latest forecasts.
       {% else %}
-      ground truth from DWD observations or median of latest forecasts.
+      ground truth from DWD observations or average of latest forecasts.
       {% endif %}
     </p>
 
@@ -916,6 +916,12 @@ function evalLoadProviders() {
     chk.querySelector('input').addEventListener('change', evalUpdate);
     evalProvDiv.appendChild(chk);
   }
+  const avg = document.createElement('label');
+  avg.className = 'eval-prov-item';
+  avg.innerHTML = `<input type="checkbox" checked disabled data-prov="average">
+    <span class="eval-prov-swatch" style="background:#8b5cf6"></span> Average (always)`;
+  evalProvDiv.appendChild(avg);
+
   const med = document.createElement('label');
   med.className = 'eval-prov-item';
   med.innerHTML = `<input type="checkbox" checked disabled data-prov="median">

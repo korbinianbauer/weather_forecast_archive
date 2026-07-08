@@ -663,7 +663,7 @@ function renderEvolutionInline(locId, data) {
   }
 
   function evoCategorize(name) {
-    if (name === 'Median') return 'Median';
+    if (name === 'Average' || name === 'Median') return 'Combine';
     if (obsLabels.has(name)) return 'Weather stations';
     return 'Forecast';
   }
@@ -672,7 +672,7 @@ function renderEvolutionInline(locId, data) {
   if (legendEntries.length) {
     const legendEl = document.createElement('div');
     legendEl.className = 'plot-legend';
-    const cats = { Forecast: [], Median: [], 'Weather stations': [] };
+    const cats = { Forecast: [], Combine: [], 'Weather stations': [] };
     for (const e of legendEntries) {
       cats[evoCategorize(e.name)].push(e);
     }
@@ -1049,8 +1049,8 @@ function buildLegend(rows) {
     }
   }
 
-  addSection('Forecast', rows.filter(r => r.provider !== 'dwd' && r.provider !== 'median'));
-  addSection('Median', rows.filter(r => r.provider === 'median'));
+  addSection('Forecast', rows.filter(r => r.provider !== 'dwd' && r.provider !== 'average' && r.provider !== 'median'));
+  addSection('Combine', rows.filter(r => r.provider === 'average' || r.provider === 'median'));
   addSection('Weather stations', rows.filter(r => r.provider === 'dwd'));
 
   return { el, items };
@@ -1063,8 +1063,30 @@ function medianOf(vals) {
   return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
 }
 
+function averageOf(vals) {
+  const v = vals.filter(x => x !== null && x !== undefined);
+  if (v.length < 2) return null;
+  return v.reduce((a, b) => a + b, 0) / v.length;
+}
+
 const MEDIAN_FIELDS = ['temperature', 'temp_max', 'temp_min', 'sunshine_hours',
   'precip_probability', 'precip_amount', 'wind_speed', 'cloud_cover', 'pressure', 'humidity'];
+
+// Synthetic 'Average' row: field-wise mean across providers, per date,
+// only where ≥2 providers have a value.
+function buildAverageRow(rows, dates) {
+  const byDate = {};
+  for (const d of dates) {
+    const e = {};
+    let any = false;
+    for (const f of MEDIAN_FIELDS) {
+      const m = averageOf(rows.map(r => r.byDate[d]?.[f] ?? null));
+      if (m !== null) { e[f] = Math.round(m * 10) / 10; any = true; }
+    }
+    if (any) byDate[d] = e;
+  }
+  return { provider: 'average', label: 'Average', byDate };
+}
 
 // Synthetic 'Median' row: field-wise median across providers, per date,
 // only where ≥2 providers have a value.
@@ -1182,7 +1204,7 @@ function renderPlot(locId) {
   const dates = loc.dates;
   const forecastRows = loc.rows.filter(r => r.provider !== 'dwd');
   const rows = forecastRows.length >= 2
-    ? [...loc.rows, buildMedianRow(forecastRows, dates)]
+    ? [...loc.rows, buildAverageRow(forecastRows, dates), buildMedianRow(forecastRows, dates)]
     : loc.rows;
 
   const { el: legendEl, items: legendItems } = buildLegend(rows);
@@ -1214,6 +1236,7 @@ function renderPlot(locId) {
 
     if (!traces.length) continue;
     traces.forEach(t => {
+      if (t._provider === 'average' && t.line?.width) t.line.width = 3;
       if (t._provider === 'median' && t.line?.width) t.line.dash = 'dash';
       if (t._provider === 'dwd' && t.line?.width) t.line.dash = 'dot';
     });
