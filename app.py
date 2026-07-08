@@ -186,7 +186,7 @@ def _load_provider_colors() -> dict[str, str]:
         colors = json.loads(db.get_setting('provider_colors', '{}'))
     except json.JSONDecodeError:
         colors = {}
-    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'average': '#8b5cf6', 'median': '#111827', 'dwd': '#dc2626'}
+    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'average': '#111827', 'median': '#111827', 'dwd': '#dc2626'}
     return {**defaults, **colors}
 
 
@@ -835,7 +835,7 @@ def _eval_var_traces(
                 'x': leads, 'y': ys,
                 'type': 'scatter', 'mode': 'lines+markers',
                 'name': 'Average',
-                'line': {'color': ac, 'width': 3},
+                'line': {'color': ac, 'width': 2, 'dash': 'dash'},
                 'marker': {'size': 6, 'color': ac},
             })
         if len(med_err) >= 2:
@@ -1012,7 +1012,7 @@ def api_evolution(location_id):
     # Style pseudo-providers: average solid, median dashed
     for t in traces:
         if t.get('legendgroup') == 'Average' and t.get('line', {}).get('width'):
-            t['line']['width'] = 3
+            t['line']['dash'] = 'dash'
         if t.get('legendgroup') == 'Median' and t.get('line', {}).get('width'):
             t['line']['dash'] = 'dash'
     return jsonify({

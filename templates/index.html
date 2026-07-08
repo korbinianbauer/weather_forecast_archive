@@ -695,6 +695,16 @@ function renderEvolutionInline(locId, data) {
         legendItems[e.name] = { cb };
       }
     }
+    // Restore combine selection from saved state, or default to Average
+    const savedCombine = evoState[locId]?.combine;
+    if (savedCombine === undefined) {
+      if (legendItems['Average']?.cb) legendItems['Average'].cb.checked = true;
+      if (legendItems['Median']?.cb) legendItems['Median'].cb.checked = false;
+    } else {
+      for (const name of ['Average', 'Median']) {
+        if (legendItems[name]?.cb) legendItems[name].cb.checked = name === savedCombine;
+      }
+    }
     fragment.appendChild(legendEl);
   }
 
@@ -783,11 +793,91 @@ function renderEvolutionInline(locId, data) {
     }, { responsive: true, displayModeBar: false });
   }
 
+  // Apply combine trace visibility from saved state (default to Average)
+  const savedCombine = evoState[locId]?.combine ?? 'Average';
+  for (const [divId, nameMap] of Object.entries(traceMap)) {
+    for (const [name, idxs] of Object.entries(nameMap)) {
+      if (name === 'Average' || name === 'Median') {
+        const visible = name === savedCombine;
+        if (idxs.length) Plotly.restyle(divId, { visible }, idxs);
+      }
+    }
+  }
+
+  // Restore saved legend checkbox states for forecast providers
+  const savedChecked = evoState[locId]?.checked;
+  if (savedChecked) {
+    for (const [name, checked] of Object.entries(savedChecked)) {
+      if (legendItems[name]?.cb) legendItems[name].cb.checked = checked;
+    }
+    for (const [divId, nameMap] of Object.entries(traceMap)) {
+      for (const [name, idxs] of Object.entries(nameMap)) {
+        if (name !== 'Average' && name !== 'Median' && !obsLabels.has(name)) {
+          const checked = legendItems[name]?.cb?.checked;
+          if (checked !== undefined && idxs.length) {
+            Plotly.restyle(divId, { visible: checked }, idxs);
+          }
+        }
+      }
+    }
+  }
+
+  function evoIsCombine(n) { return n === 'Average' || n === 'Median'; }
+  function evoIsForecast(n) { return !evoIsCombine(n) && !obsLabels.has(n); }
+  function evoAnyCombineActive() {
+    return Object.entries(legendItems)
+      .filter(([n]) => evoIsCombine(n))
+      .some(([, { cb: c }]) => c.checked);
+  }
+  function evoSetForecastWidths() {
+    const active = evoAnyCombineActive();
+    const w = active ? 1 : 2, ms = active ? 3 : 6;
+    for (const [divId, nameMap] of Object.entries(traceMap)) {
+      const idxs = [];
+      for (const [n, ii] of Object.entries(nameMap)) {
+        if (evoIsForecast(n)) idxs.push(...ii);
+      }
+      if (idxs.length) Plotly.restyle(divId, { 'line.width': w, 'marker.size': ms }, idxs);
+    }
+  }
+
+  // Apply initial forecast line widths based on combine state
+  evoSetForecastWidths();
+
   for (const [name, { cb }] of Object.entries(legendItems)) {
     cb.addEventListener('change', () => {
+      // Combine mutual exclusivity
+      if (evoIsCombine(name) && cb.checked) {
+        const other = name === 'Average' ? 'Median' : 'Average';
+        const ocb = legendItems[other]?.cb;
+        if (ocb?.checked) {
+          ocb.checked = false;
+          for (const [divId, nameMap] of Object.entries(traceMap)) {
+            const idxs = nameMap[other] || [];
+            if (idxs.length) Plotly.restyle(divId, { visible: false }, idxs);
+          }
+        }
+      }
+
+      // Save combine selection
+      if (evoIsCombine(name)) {
+        if (evoState[locId]) evoState[locId].combine = cb.checked ? name : null;
+      }
+
+      // Toggle visibility for this provider
       for (const [divId, nameMap] of Object.entries(traceMap)) {
         const indices = nameMap[name] || [];
         if (indices.length) Plotly.restyle(divId, { visible: cb.checked }, indices);
+      }
+
+      // Thin forecast lines when combine active
+      evoSetForecastWidths();
+
+      // Save all legend checkbox states
+      if (evoState[locId]) {
+        evoState[locId].checked = Object.fromEntries(
+          Object.entries(legendItems).map(([n, { cb: c }]) => [n, c.checked])
+        );
       }
     });
   }
@@ -858,7 +948,7 @@ function navigateEvolution(locId, date, mode) {
     else el.classList.add('evo-dimmed');
   });
 
-  evoState[locId] = { date, mode };
+  evoState[locId] = { date, mode, combine: prev.combine, checked: prev.checked };
   updatePageTitle();
 
   fetch(`/api/location/${locId}/evolution?date=${encodeURIComponent(date)}&mode=${mode}`)
@@ -905,7 +995,7 @@ function openEvolution(locId, date, mode) {
   const card = document.getElementById('card-' + locId);
   if (card) { card.classList.add('loc-evo-open'); card.style.position = 'relative'; }
 
-  evoState[locId] = { date, mode };
+  evoState[locId] = { date, mode, combine: prev?.combine, checked: prev?.checked };
   updatePageTitle();
   evoEl.style.display = '';
 
@@ -1052,6 +1142,10 @@ function buildLegend(rows) {
   addSection('Forecast', rows.filter(r => r.provider !== 'dwd' && r.provider !== 'average' && r.provider !== 'median'));
   addSection('Combine', rows.filter(r => r.provider === 'average' || r.provider === 'median'));
   addSection('Weather stations', rows.filter(r => r.provider === 'dwd'));
+
+  // Default: Average checked, Median unchecked
+  if (items.average?.cb) items.average.cb.checked = true;
+  if (items.median?.cb) items.median.cb.checked = false;
 
   return { el, items };
 }
@@ -1236,7 +1330,7 @@ function renderPlot(locId) {
 
     if (!traces.length) continue;
     traces.forEach(t => {
-      if (t._provider === 'average' && t.line?.width) t.line.width = 3;
+      if (t._provider === 'average' && t.line?.width) t.line.dash = 'dash';
       if (t._provider === 'median' && t.line?.width) t.line.dash = 'dash';
       if (t._provider === 'dwd' && t.line?.width) t.line.dash = 'dot';
     });
@@ -1290,12 +1384,81 @@ function renderPlot(locId) {
   }
   (window._plotDivsByLoc ||= {})[locId] = plotDivs;
 
+  // Hide unchecked combine traces
+  for (const [divId, provMap] of Object.entries(traceMap)) {
+    for (const [provider, idxs] of Object.entries(provMap)) {
+      if (isCombine(provider) && legendItems[provider]?.cb?.checked === false && idxs.length) {
+        Plotly.restyle(divId, { visible: false }, idxs);
+      }
+    }
+  }
+
+  function isCombine(p) { return p === 'average' || p === 'median'; }
+  function isForecast(p) { return p !== 'average' && p !== 'median' && p !== 'dwd'; }
+  function anyCombineActive() {
+    return Object.entries(legendItems)
+      .filter(([p]) => isCombine(p))
+      .some(([, { cb: c }]) => c.checked);
+  }
+  function setForecastWidths() {
+    const active = anyCombineActive();
+    const w = active ? 1 : 2, ms = active ? 3 : 5;
+    for (const [divId, provMap] of Object.entries(traceMap)) {
+      const idxs = [];
+      for (const [p, ii] of Object.entries(provMap)) {
+        if (isForecast(p)) idxs.push(...ii);
+      }
+      if (idxs.length) Plotly.restyle(divId, { 'line.width': w, 'marker.size': ms }, idxs);
+    }
+  }
+
+  // Restore saved legend checkbox states
+  const saved = window._legendCheckedState?.[locId];
+  if (saved) {
+    for (const [provider, checked] of Object.entries(saved)) {
+      if (legendItems[provider]?.cb) legendItems[provider].cb.checked = checked;
+    }
+    for (const [divId, provMap] of Object.entries(traceMap)) {
+      for (const [provider, idxs] of Object.entries(provMap)) {
+        const checked = legendItems[provider]?.cb?.checked;
+        if (checked !== undefined && idxs.length) {
+          Plotly.restyle(divId, { visible: checked }, idxs);
+        }
+      }
+    }
+  }
+
+  // Apply initial forecast line widths based on combine state
+  setForecastWidths();
+
   for (const [provider, { cb }] of Object.entries(legendItems)) {
     cb.addEventListener('change', () => {
+      // Combine mutual exclusivity
+      if (isCombine(provider) && cb.checked) {
+        const other = provider === 'average' ? 'median' : 'average';
+        const ocb = legendItems[other]?.cb;
+        if (ocb?.checked) {
+          ocb.checked = false;
+          for (const [divId, provMap] of Object.entries(traceMap)) {
+            const idxs = provMap[other] || [];
+            if (idxs.length) Plotly.restyle(divId, { visible: false }, idxs);
+          }
+        }
+      }
+
+      // Toggle visibility for this provider
       for (const [divId, provMap] of Object.entries(traceMap)) {
         const indices = provMap[provider] || [];
         if (indices.length) Plotly.restyle(divId, { visible: cb.checked }, indices);
       }
+
+      // Thin forecast lines when combine active
+      setForecastWidths();
+
+      // Save legend checkbox states
+      (window._legendCheckedState ||= {})[locId] = Object.fromEntries(
+        Object.entries(legendItems).map(([p, { cb: c }]) => [p, c.checked])
+      );
     });
   }
 
