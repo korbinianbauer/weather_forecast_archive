@@ -1478,7 +1478,6 @@ function toggleLocationCard(locId) {
   history.replaceState(null, '', '#loc-' + locId);
   showForecastPlot(locId);
   window.dispatchEvent(new Event('resize')); // let Plotly recompute chart widths
-  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // Restore the open card across reloads (e.g. after a poll finishes)
