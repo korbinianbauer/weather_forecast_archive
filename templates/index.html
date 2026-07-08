@@ -192,6 +192,7 @@
     <div id="rows-{{ loc.id }}">
       {% if item.all_dates %}
         {% for row in item.rows %}
+        {% if row.provider != 'dwd' %}
         <div class="provider-row">
           <div class="provider-label">
             {{ provider_labels.get(row.provider, row.provider) }}
@@ -240,6 +241,7 @@
             {% endfor %}
           </div>
         </div>
+        {% endif %}
         {% endfor %}
       {% else %}
         <div style="color:var(--muted); font-size:.875rem; padding:.5rem 0;">No forecast data yet.</div>
@@ -597,6 +599,7 @@ function renderEvolutionInline(locId, data) {
   }
 
   const defaultLabel = defaultProvider ? (providerLabels[defaultProvider] || defaultProvider) : null;
+  const obsLabels = new Set(data.observation_labels || []);
 
   // Legend keyed by legendgroup so per-poll hourly traces collapse to one provider entry
   const legendEntries = [], legendSeen = new Set();
@@ -615,21 +618,38 @@ function renderEvolutionInline(locId, data) {
     });
   }
 
+  function evoCategorize(name) {
+    if (name === 'Median') return 'Median';
+    if (obsLabels.has(name)) return 'Weather stations';
+    return 'Forecast';
+  }
+
   const legendItems = {};
   if (legendEntries.length) {
     const legendEl = document.createElement('div');
     legendEl.className = 'plot-legend';
+    const cats = { Forecast: [], Median: [], 'Weather stations': [] };
     for (const e of legendEntries) {
-      const item = document.createElement('label');
-      item.className = 'plot-legend-item';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = !defaultLabel || e.name === defaultLabel;
-      item.appendChild(cb);
-      item.insertAdjacentHTML('beforeend',
-        `<span class="plot-legend-swatch" style="background:${e.color}"></span>${e.name}`);
-      legendEl.appendChild(item);
-      legendItems[e.name] = { cb };
+      cats[evoCategorize(e.name)].push(e);
+    }
+    for (const [header, entries] of Object.entries(cats)) {
+      if (!entries.length) continue;
+      const hdr = document.createElement('div');
+      hdr.className = 'plot-legend-header';
+      hdr.textContent = header;
+      legendEl.appendChild(hdr);
+      for (const e of entries) {
+        const item = document.createElement('label');
+        item.className = 'plot-legend-item';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = !defaultLabel || e.name === defaultLabel;
+        item.appendChild(cb);
+        item.insertAdjacentHTML('beforeend',
+          `<span class="plot-legend-swatch" style="background:${e.color}"></span>${e.name}`);
+        legendEl.appendChild(item);
+        legendItems[e.name] = { cb };
+      }
     }
     container.appendChild(legendEl);
   }
@@ -915,20 +935,33 @@ function buildLegend(rows) {
   const el = document.createElement('div');
   el.className = 'plot-legend';
   const items = {};
-  for (const row of rows) {
-    if (seen.has(row.provider)) continue;
-    seen.add(row.provider);
-    const item = document.createElement('label');
-    item.className = 'plot-legend-item';
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = true;
-    item.appendChild(cb);
-    item.insertAdjacentHTML('beforeend',
-      `<span class="plot-legend-swatch" style="background:${rgba(row.provider, 1)}"></span>${row.label}`);
-    el.appendChild(item);
-    items[row.provider] = { el: item, cb };
+
+  function addSection(headerText, sectionRows) {
+    if (!sectionRows.length) return;
+    const hdr = document.createElement('div');
+    hdr.className = 'plot-legend-header';
+    hdr.textContent = headerText;
+    el.appendChild(hdr);
+    for (const row of sectionRows) {
+      if (seen.has(row.provider)) continue;
+      seen.add(row.provider);
+      const item = document.createElement('label');
+      item.className = 'plot-legend-item';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = true;
+      item.appendChild(cb);
+      item.insertAdjacentHTML('beforeend',
+        `<span class="plot-legend-swatch" style="background:${rgba(row.provider, 1)}"></span>${row.label}`);
+      el.appendChild(item);
+      items[row.provider] = { el: item, cb };
+    }
   }
+
+  addSection('Forecast', rows.filter(r => r.provider !== 'dwd' && r.provider !== 'median'));
+  addSection('Median', rows.filter(r => r.provider === 'median'));
+  addSection('Weather stations', rows.filter(r => r.provider === 'dwd'));
+
   return { el, items };
 }
 

@@ -940,6 +940,7 @@ def api_evolution(location_id):
         'target_date': target_date,
         'mode': mode,
         'provider_labels': provider_labels_map,
+        'observation_labels': [provider_labels_map[p] for p in _OBSERVATION_PROVIDERS],
         'default_provider': default_provider,
         'pressure_range': db.get_metric_range(location_id, 'pressure'),
     })
