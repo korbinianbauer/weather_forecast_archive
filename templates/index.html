@@ -163,7 +163,7 @@
 
     {# ── date navigation ── #}
     <div class="date-nav">
-      <a class="btn btn-outline btn-sm" href="{{ url_for('index') }}#loc-{{ loc.id }}">Today</a>
+      <button class="btn btn-outline btn-sm" onclick="navStartTo(_todayStr, {{ loc.id }})">Today</button>
       <span class="date-nav-group">
         <button class="btn btn-outline btn-sm" onclick="navShift(0, -1, {{ loc.id }})" title="One month back">−1M</button>
         <button class="btn btn-outline btn-sm" onclick="navShift(-7, 0, {{ loc.id }})" title="One week back">−1W</button>
@@ -554,12 +554,14 @@ function buildEvolutionAxisDecorations(x0Str, x1Str, targetDate) {
 
 function renderEvolutionInline(locId, data) {
   const container = document.getElementById('evo-charts-' + locId);
-  container.innerHTML = '';
   const mode = data.mode || 'daily';
   const tracesAll = data.traces;
   const targetDate = data.target_date;
   const defaultProvider = data.default_provider;
   const providerLabels = data.provider_labels;
+
+  // Build everything in a fragment so the container never becomes empty
+  const fragment = document.createDocumentFragment();
 
   // daily-evolution / hourly toggle
   const modeBar = document.createElement('div');
@@ -572,11 +574,66 @@ function renderEvolutionInline(locId, data) {
     else b.addEventListener('click', () => openEvolution(locId, targetDate, m));
     modeBar.appendChild(b);
   }
-  container.appendChild(modeBar);
+  fragment.appendChild(modeBar);
+
+  // Date navigation for the evolution view
+  const evoDateNav = document.createElement('div');
+  evoDateNav.className = 'date-nav';
+  evoDateNav.style.marginBottom = '.6rem';
+  (() => {
+    const prevBtn = document.createElement('button');
+    prevBtn.type = 'button';
+    prevBtn.className = 'btn btn-outline btn-sm';
+    prevBtn.textContent = '−1D';
+    prevBtn.addEventListener('click', () => {
+      const d = new Date(targetDate + 'T00:00:00');
+      d.setDate(d.getDate() - 1);
+      const s = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+      navigateEvolution(locId, s, mode);
+    });
+    evoDateNav.appendChild(prevBtn);
+
+    const inp = document.createElement('input');
+    inp.type = 'date';
+    inp.value = targetDate;
+    Object.assign(inp.style, {
+      padding: '.3rem .5rem', border: '1px solid var(--border)', borderRadius: '6px',
+      fontSize: '.82rem', background: 'var(--surface)', color: 'var(--text)', cursor: 'pointer',
+    });
+    inp.addEventListener('change', () => { if (inp.value) navigateEvolution(locId, inp.value, mode); });
+    evoDateNav.appendChild(inp);
+
+    const todayBtn = document.createElement('button');
+    todayBtn.type = 'button';
+    todayBtn.className = 'btn btn-outline btn-sm';
+    todayBtn.textContent = 'Today';
+    todayBtn.addEventListener('click', () => { if (targetDate !== _todayStr) navigateEvolution(locId, _todayStr, mode); });
+    evoDateNav.appendChild(todayBtn);
+
+    const nextBtn = document.createElement('button');
+    nextBtn.type = 'button';
+    nextBtn.className = 'btn btn-outline btn-sm';
+    nextBtn.textContent = '+1D';
+    nextBtn.addEventListener('click', () => {
+      const d = new Date(targetDate + 'T00:00:00');
+      d.setDate(d.getDate() + 1);
+      const s = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+      navigateEvolution(locId, s, mode);
+    });
+    evoDateNav.appendChild(nextBtn);
+  })();
+  fragment.appendChild(evoDateNav);
 
   if (!tracesAll || !tracesAll.length) {
-    container.insertAdjacentHTML('beforeend',
-      `<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">No ${mode === 'hourly' ? 'hourly forecast' : 'evolution'} data for this date.</div>`);
+    const msg = document.createElement('div');
+    msg.style.cssText = 'color:var(--muted);font-size:.85rem;padding:.5rem 0';
+    msg.textContent = `No ${mode === 'hourly' ? 'hourly forecast' : 'evolution'} data for this date.`;
+    fragment.appendChild(msg);
+    const spacer = document.createElement('div');
+    spacer.style.minHeight = '400px';
+    fragment.appendChild(spacer);
+    container.style.minHeight = '';
+    container.replaceChildren(fragment);
     return;
   }
 
@@ -657,7 +714,7 @@ function renderEvolutionInline(locId, data) {
         legendItems[e.name] = { cb };
       }
     }
-    container.appendChild(legendEl);
+    fragment.appendChild(legendEl);
   }
 
   let allChartShapes = [], xaxisLayout;
@@ -707,9 +764,13 @@ function renderEvolutionInline(locId, data) {
     plotDiv.id = divId;
     plotDiv.style.height = '200px';
     wrap.appendChild(plotDiv);
-    container.appendChild(wrap);
+    fragment.appendChild(wrap);
     divIds.push(divId);
   }
+
+  // Atomic swap: replace old content with the new fragment
+  container.style.minHeight = '';
+  container.replaceChildren(fragment);
 
   const traceMap = {};
   for (let mi = 0; mi < allMetrics.length; mi++) {
@@ -796,6 +857,37 @@ function drawEvolutionConnector(locId) {
   card.appendChild(svg);
 }
 
+function navigateEvolution(locId, date, mode) {
+  const prev = evoState[locId];
+  if (!prev) return;
+  mode = mode || prev.mode;
+  if (prev.date === date && prev.mode === mode) return;
+
+  document.querySelectorAll(`.day-cell[data-loc="${locId}"]`).forEach(el => {
+    el.classList.remove('evo-active', 'evo-dimmed');
+  });
+  document.querySelectorAll(`.day-cell[data-loc="${locId}"]`).forEach(el => {
+    if (el.dataset.date === date) el.classList.add('evo-active');
+    else el.classList.add('evo-dimmed');
+  });
+
+  evoState[locId] = { date, mode };
+  updatePageTitle();
+
+  fetch(`/api/location/${locId}/evolution?date=${encodeURIComponent(date)}&mode=${mode}`)
+    .then(r => r.json())
+    .then(data => {
+      const cur = evoState[locId];
+      if (!cur || cur.date !== date || cur.mode !== mode) return;
+      renderEvolutionInline(locId, data);
+      setTimeout(() => drawEvolutionConnector(locId), 120);
+    })
+    .catch(() => {
+      const chartsEl = document.getElementById('evo-charts-' + locId);
+      if (chartsEl) chartsEl.innerHTML = '<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">Failed to load evolution data.</div>';
+    });
+}
+
 function openEvolution(locId, date, mode) {
   const evoEl  = document.getElementById('evo-' + locId);
   const plotEl = document.getElementById('plot-' + locId);
@@ -805,7 +897,10 @@ function openEvolution(locId, date, mode) {
   mode = mode || (prev && prev.mode) || 'daily';
   if (prev && prev.date === date && prev.mode === mode) { closeEvolution(locId); return; }
 
-  closeEvolution(locId); // clean up any previous open state for this location
+  if (prev) {
+    navigateEvolution(locId, date, mode);
+    return;
+  }
 
   if (plotEl.classList.contains('visible')) {
     plotEl.classList.remove('visible');
@@ -826,7 +921,7 @@ function openEvolution(locId, date, mode) {
   evoEl.style.display = '';
 
   const chartsEl = document.getElementById('evo-charts-' + locId);
-  chartsEl.innerHTML = '<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">Loading…</div>';
+  chartsEl.style.minHeight = '400px';
 
   fetch(`/api/location/${locId}/evolution?date=${encodeURIComponent(date)}&mode=${mode}`)
     .then(r => r.json())
@@ -1330,7 +1425,6 @@ function navStartTo(dateStr, locId) {
       if (evo) {
         const ce = document.getElementById('evo-charts-' + locId);
         if (ce) {
-          ce.innerHTML = '<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">Updating…</div>';
           fetch('/api/location/' + locId + '/evolution?date=' + encodeURIComponent(evo.date) + '&mode=' + evo.mode)
             .then(r => r.json())
             .then(d2 => {
