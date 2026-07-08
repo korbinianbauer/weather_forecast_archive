@@ -8,7 +8,29 @@
     gap: .6rem; margin-bottom: .85rem;
   }
   .loc-header h2 { margin: 0; font-size: 1.15rem; }
-  .loc-actions { margin-left: auto; display: flex; gap: .4rem; flex-wrap: wrap; }
+  .loc-actions { margin-left: auto; position: relative; }
+  .loc-menu-wrap { position: relative; }
+  .loc-menu-btn {
+    background: none; border: 1px solid var(--border); border-radius: 4px;
+    cursor: pointer; padding: .15rem .35rem; font-size: 1.1rem; line-height: 1;
+    color: var(--muted); transition: background .15s;
+  }
+  .loc-menu-btn:hover { background: var(--bg); }
+  .loc-menu {
+    display: none; position: absolute; right: 0; top: 100%; z-index: 50;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,.12);
+    min-width: 140px; overflow: hidden; margin-top: 4px;
+  }
+  .loc-menu.open { display: block; }
+  .loc-menu-item {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .5rem .75rem; font-size: .82rem; cursor: pointer;
+    border: none; background: none; width: 100%; text-align: left;
+    color: var(--text); text-decoration: none; font-family: inherit;
+  }
+  .loc-menu-item:hover { background: var(--bg); }
+  .loc-menu-item.danger { color: var(--danger); }
 
   .provider-row { margin-bottom: .6rem; }
   .provider-row:last-child { margin-bottom: 0; }
@@ -149,12 +171,17 @@
       </span>
       <div class="loc-actions">
         {% if session.logged_in %}
-        <button class="btn btn-outline btn-sm" onclick="refreshLocation(this, {{ loc.id }}, '{{ csrf_token() }}')">↻</button>
-        <form method="post" action="{{ url_for('delete_location', location_id=loc.id) }}"
-              onsubmit="return confirm('Remove {{ loc.name }}?')" style="display:contents;">
-          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-          <button class="btn btn-danger btn-sm">✕</button>
-        </form>
+        <div class="loc-menu-wrap">
+          <button class="loc-menu-btn" onclick="toggleLocMenu(event, this)" title="Actions">⋮</button>
+          <div class="loc-menu">
+            <button class="loc-menu-item" onclick="refreshLocation(this, {{ loc.id }}, '{{ csrf_token() }}')">↻ Refresh</button>
+            <form method="post" action="{{ url_for('delete_location', location_id=loc.id) }}"
+                  onsubmit="return confirm('Remove {{ loc.name }}?')" style="margin:0;">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <button class="loc-menu-item danger">🗑 Remove</button>
+            </form>
+          </div>
+        </div>
         {% endif %}
       </div>
     </div>
@@ -1577,6 +1604,18 @@ document.querySelectorAll('.day-cell[data-date]:not(.empty)').forEach(cell => {
   await reloadWhenIdle();
 })();
 {% endif %}
+
+// ── three-dot location menu ─────────────────────────────────────────
+function toggleLocMenu(ev, btn) {
+  ev.stopPropagation();
+  const menu = btn.nextElementSibling;
+  const wasOpen = menu.classList.contains('open');
+  document.querySelectorAll('.loc-menu.open').forEach(el => el.classList.remove('open'));
+  if (!wasOpen) menu.classList.add('open');
+}
+document.addEventListener('click', () => {
+  document.querySelectorAll('.loc-menu.open').forEach(el => el.classList.remove('open'));
+});
 </script>
 
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
