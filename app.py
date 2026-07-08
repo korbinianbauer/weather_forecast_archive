@@ -920,18 +920,27 @@ def api_evaluation():
             continue
 
         if (gt_source == 'average') or (gt_source == 'auto' and dwd_row is None):
-            latest: dict[str, dict] = {}
+            closest: dict[str, dict] = {}
             for r in date_rows:
                 if r['provider'] in _OBSERVATION_PROVIDERS:
                     continue
                 p = r['provider']
-                if p not in latest or r['fetched_at'] > latest[p]['fetched_at']:
-                    latest[p] = r
-            if not latest:
+                try:
+                    lead = (_date.fromisoformat(r['forecast_time'][:10])
+                            - _date.fromisoformat(r['fetched_at'][:10])).days
+                except (ValueError, TypeError):
+                    continue
+                if lead < 0:
+                    continue
+                if p not in closest or lead < closest[p].get('_lead', 999):
+                    r['_lead'] = lead
+                    closest[p] = r
+            lead0 = {p: r for p, r in closest.items() if r.get('_lead') == 0}
+            if not lead0:
                 continue
             row_vals: dict[str, float | None] = {}
             for var in _VAR_ORDER:
-                vals = [r.get(var) for r in latest.values() if r.get(var) is not None]
+                vals = [r.get(var) for r in lead0.values() if r.get(var) is not None]
                 if len(vals) >= 2:
                     row_vals[var] = statistics.mean(vals)
                 elif len(vals) == 1:
