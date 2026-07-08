@@ -603,54 +603,6 @@ function renderEvolutionInline(locId, data) {
   }
   fragment.appendChild(modeBar);
 
-  // Date navigation for the evolution view
-  const evoDateNav = document.createElement('div');
-  evoDateNav.className = 'date-nav';
-  evoDateNav.style.marginBottom = '.6rem';
-  (() => {
-    const prevBtn = document.createElement('button');
-    prevBtn.type = 'button';
-    prevBtn.className = 'btn btn-outline btn-sm';
-    prevBtn.textContent = '−1D';
-    prevBtn.addEventListener('click', () => {
-      const d = new Date(targetDate + 'T00:00:00');
-      d.setDate(d.getDate() - 1);
-      const s = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-      navigateEvolution(locId, s, mode);
-    });
-    evoDateNav.appendChild(prevBtn);
-
-    const inp = document.createElement('input');
-    inp.type = 'date';
-    inp.value = targetDate;
-    Object.assign(inp.style, {
-      padding: '.3rem .5rem', border: '1px solid var(--border)', borderRadius: '6px',
-      fontSize: '.82rem', background: 'var(--surface)', color: 'var(--text)', cursor: 'pointer',
-    });
-    inp.addEventListener('change', () => { if (inp.value) navigateEvolution(locId, inp.value, mode); });
-    evoDateNav.appendChild(inp);
-
-    const todayBtn = document.createElement('button');
-    todayBtn.type = 'button';
-    todayBtn.className = 'btn btn-outline btn-sm';
-    todayBtn.textContent = 'Today';
-    todayBtn.addEventListener('click', () => { if (targetDate !== _todayStr) navigateEvolution(locId, _todayStr, mode); });
-    evoDateNav.appendChild(todayBtn);
-
-    const nextBtn = document.createElement('button');
-    nextBtn.type = 'button';
-    nextBtn.className = 'btn btn-outline btn-sm';
-    nextBtn.textContent = '+1D';
-    nextBtn.addEventListener('click', () => {
-      const d = new Date(targetDate + 'T00:00:00');
-      d.setDate(d.getDate() + 1);
-      const s = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-      navigateEvolution(locId, s, mode);
-    });
-    evoDateNav.appendChild(nextBtn);
-  })();
-  fragment.appendChild(evoDateNav);
-
   if (!tracesAll || !tracesAll.length) {
     const msg = document.createElement('div');
     msg.style.cssText = 'color:var(--muted);font-size:.85rem;padding:.5rem 0';
