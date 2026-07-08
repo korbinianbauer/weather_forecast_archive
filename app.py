@@ -824,7 +824,7 @@ def _eval_var_traces(
                 'line': {'color': color, 'width': 2},
                 'marker': {'size': 6, 'color': color},
             })
-        if len(avg_err) >= 2:
+        if len(avg_err) >= 2 and (not selected or 'average' in selected):
             leads = sorted(avg_err)
             if metric == 'rmse':
                 ys = [statistics.mean(v ** 2 for v in avg_err[l]) ** 0.5 for l in leads]
@@ -838,7 +838,7 @@ def _eval_var_traces(
                 'line': {'color': ac, 'width': 2, 'dash': 'dash'},
                 'marker': {'size': 6, 'color': ac},
             })
-        if len(med_err) >= 2:
+        if len(med_err) >= 2 and (not selected or 'median' in selected):
             leads = sorted(med_err)
             if metric == 'rmse':
                 ys = [statistics.mean(v ** 2 for v in med_err[l]) ** 0.5 for l in leads]
@@ -864,6 +864,7 @@ def api_evaluation():
     date_start = request.args.get('date_start', (_date.today() - timedelta(days=365)).isoformat())
     date_end   = request.args.get('date_end', _date.today().isoformat())
     selected   = request.args.getlist('providers') or None
+    gt_source  = request.args.get('gt_source', 'auto')
 
     # Determine locations
     if not location_param or location_param == 'all':
@@ -912,30 +913,31 @@ def api_evaluation():
 
     gt_values: dict[tuple[int, str], dict[str, float | None]] = {}
     for (lid, dt), date_rows in sorted(by_loc_date.items()):
-        # 1) DWD observation (has all variables)
         dwd_row = next((r for r in date_rows if r['provider'] == 'dwd'), None)
-        if dwd_row is not None:
+
+        if (gt_source == 'auto' or gt_source == 'dwd') and dwd_row is not None:
             gt_values[(lid, dt)] = {var: dwd_row.get(var) for var in _VAR_ORDER}
             continue
-        # 2) average of latest forecasts per variable
-        latest: dict[str, dict] = {}
-        for r in date_rows:
-            if r['provider'] in _OBSERVATION_PROVIDERS:
+
+        if (gt_source == 'average') or (gt_source == 'auto' and dwd_row is None):
+            latest: dict[str, dict] = {}
+            for r in date_rows:
+                if r['provider'] in _OBSERVATION_PROVIDERS:
+                    continue
+                p = r['provider']
+                if p not in latest or r['fetched_at'] > latest[p]['fetched_at']:
+                    latest[p] = r
+            if not latest:
                 continue
-            p = r['provider']
-            if p not in latest or r['fetched_at'] > latest[p]['fetched_at']:
-                latest[p] = r
-        if not latest:
-            continue
-        row_vals: dict[str, float | None] = {}
-        for var in _VAR_ORDER:
-            vals = [r.get(var) for r in latest.values() if r.get(var) is not None]
-            if len(vals) >= 2:
-                row_vals[var] = statistics.mean(vals)
-            elif len(vals) == 1:
-                row_vals[var] = vals[0]
-        if row_vals:
-            gt_values[(lid, dt)] = row_vals
+            row_vals: dict[str, float | None] = {}
+            for var in _VAR_ORDER:
+                vals = [r.get(var) for r in latest.values() if r.get(var) is not None]
+                if len(vals) >= 2:
+                    row_vals[var] = statistics.mean(vals)
+                elif len(vals) == 1:
+                    row_vals[var] = vals[0]
+            if row_vals:
+                gt_values[(lid, dt)] = row_vals
 
     if not gt_values:
         return jsonify({'results': {}, 'warning': 'Could not determine ground truth.'})
@@ -960,17 +962,22 @@ def api_evaluation():
                 results[var]['bias'] = {'traces': bias}
 
     # ── ground truth description ────────────────────────────────────────────
-    dwd_loc_dates = {(r['_loc_id'], r['forecast_time'][:10]) for r in dwd_rows}
-    gt_dwd   = sum(1 for k in gt_values if k in dwd_loc_dates)
     gt_total = len(gt_values)
     n_locs   = len(location_ids)
-    if gt_dwd:
-        if gt_dwd == gt_total:
-            gt_src = 'DWD weather station observations'
-        else:
-            gt_src = f'DWD ({gt_dwd}/{gt_total} location-days) + average forecast'
+    if gt_source == 'dwd':
+        gt_src = 'DWD weather station observations'
+    elif gt_source == 'average':
+        gt_src = 'Average of latest forecasts'
     else:
-        gt_src = 'Average of latest forecasts (no weather station)'
+        dwd_loc_dates = {(r['_loc_id'], r['forecast_time'][:10]) for r in dwd_rows}
+        gt_dwd = sum(1 for k in gt_values if k in dwd_loc_dates)
+        if gt_dwd:
+            if gt_dwd == gt_total:
+                gt_src = 'DWD weather station observations'
+            else:
+                gt_src = f'DWD ({gt_dwd}/{gt_total} location-days) + average forecast'
+        else:
+            gt_src = 'Average of latest forecasts (no weather station)'
     if n_locs > 1:
         gt_src += f' · {n_locs} locations'
 

@@ -598,12 +598,7 @@
 
     <h2>Retrospective Evaluation</h2>
     <p style="font-size:.82rem; color:var(--muted); margin-bottom:1.25rem;">
-      Forecast accuracy vs. lead time — using
-      {% if all_locations %}
-      DWD observations as ground truth when available, otherwise the average of the latest forecasts.
-      {% else %}
-      ground truth from DWD observations or average of latest forecasts.
-      {% endif %}
+      Forecast accuracy vs. lead time — choose the ground truth source below.
     </p>
 
     {% if not all_locations %}
@@ -631,6 +626,14 @@
       <div class="eval-fgroup">
         <label>To</label>
         <input type="date" id="eval-date-end" value="{{ today_iso }}">
+      </div>
+      <div class="eval-fgroup">
+        <label>Ground Truth</label>
+        <select id="eval-gt-source">
+          <option value="auto">Auto (DWD preferred)</option>
+          <option value="dwd">DWD observations only</option>
+          <option value="average">Average forecast only</option>
+        </select>
       </div>
       <button class="btn btn-primary" onclick="evalUpdate()">Update</button>
     </div>
@@ -918,14 +921,16 @@ function evalLoadProviders() {
   }
   const avg = document.createElement('label');
   avg.className = 'eval-prov-item';
-  avg.innerHTML = `<input type="checkbox" checked disabled data-prov="average">
-    <span class="eval-prov-swatch" style="background:#8b5cf6"></span> Average (always)`;
+  avg.innerHTML = `<input type="checkbox" checked data-prov="average">
+    <span class="eval-prov-swatch" style="background:#8b5cf6"></span> Average`;
+  avg.querySelector('input').addEventListener('change', evalUpdate);
   evalProvDiv.appendChild(avg);
 
   const med = document.createElement('label');
   med.className = 'eval-prov-item';
-  med.innerHTML = `<input type="checkbox" checked disabled data-prov="median">
-    <span class="eval-prov-swatch" style="background:#111827"></span> Median (always)`;
+  med.innerHTML = `<input type="checkbox" checked data-prov="median">
+    <span class="eval-prov-swatch" style="background:#111827"></span> Median`;
+  med.querySelector('input').addEventListener('change', evalUpdate);
   evalProvDiv.appendChild(med);
   evalUpdate();
 }
@@ -940,6 +945,7 @@ async function evalUpdate() {
   if (!locId) return evalStatus('Select a location.');
   const ds = document.getElementById('eval-date-start').value;
   const de = document.getElementById('eval-date-end').value;
+  const gtSource = document.getElementById('eval-gt-source').value;
   const providers = evalGetSelectedProviders();
 
   evalClearGrid();
@@ -949,7 +955,7 @@ async function evalUpdate() {
   spinner.innerHTML = '<span class="spinner"></span> Loading…';
   evalGrid.appendChild(spinner);
 
-  let url = `/api/evaluation?location_id=${locId}&date_start=${ds}&date_end=${de}`;
+  let url = `/api/evaluation?location_id=${locId}&date_start=${ds}&date_end=${de}&gt_source=${gtSource}`;
   for (const p of providers) url += '&providers=' + encodeURIComponent(p);
 
   try {
