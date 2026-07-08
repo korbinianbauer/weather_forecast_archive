@@ -148,8 +148,6 @@
         {{ '%.4f'|format(loc.latitude) }}°, {{ '%.4f'|format(loc.longitude) }}°
       </span>
       <div class="loc-actions">
-        <button class="btn btn-outline btn-sm" id="plotbtn-{{ loc.id }}"
-                onclick="togglePlot({{ loc.id }})">📈 Plot Forecast</button>
         {% if session.logged_in %}
         <button class="btn btn-outline btn-sm" onclick="refreshLocation(this, {{ loc.id }}, '{{ csrf_token() }}')">↻</button>
         <form method="post" action="{{ url_for('delete_location', location_id=loc.id) }}"
@@ -163,18 +161,20 @@
 
     {# ── date navigation ── #}
     <div class="date-nav">
-      <button class="btn btn-outline btn-sm" onclick="navStartTo(_todayStr, {{ loc.id }})">Today</button>
-      <span class="date-nav-group">
+      <span class="date-nav-group" style="flex:1">
         <button class="btn btn-outline btn-sm" onclick="navShift(0, -1, {{ loc.id }})" title="One month back">−1M</button>
         <button class="btn btn-outline btn-sm" onclick="navShift(-7, 0, {{ loc.id }})" title="One week back">−1W</button>
         <button class="btn btn-outline btn-sm" onclick="navShift(-1, 0, {{ loc.id }})" title="One day back">−1D</button>
       </span>
-      <input type="date" value="{{ date_start }}"
-             onchange="navStartTo(this.value, {{ loc.id }})"
-             style="padding:.3rem .5rem; border:1px solid var(--border); border-radius:6px;
-                    font-size:.82rem; background:var(--surface); color:var(--text); cursor:pointer;">
-      <span style="font-size:.78rem; color:var(--muted); white-space:nowrap;">– {{ date_end }}</span>
-      <span class="date-nav-group">
+      <span style="flex:1;display:flex;justify-content:center;align-items:center;gap:.5rem;flex-wrap:wrap">
+        <button class="btn btn-outline btn-sm" onclick="navStartTo(_todayStr, {{ loc.id }})">Today</button>
+        <input type="date" value="{{ date_start }}"
+               onchange="navStartTo(this.value, {{ loc.id }})"
+               style="padding:.3rem .5rem; border:1px solid var(--border); border-radius:6px;
+                      font-size:.82rem; background:var(--surface); color:var(--text); cursor:pointer;">
+        <span class="date-end-label" style="font-size:.78rem; color:var(--muted); white-space:nowrap;">– {{ date_end }}</span>
+      </span>
+      <span class="date-nav-group" style="flex:1;justify-content:flex-end">
         <button class="btn btn-outline btn-sm" onclick="navShift(1, 0, {{ loc.id }})" title="One day forward">+1D</button>
         <button class="btn btn-outline btn-sm" onclick="navShift(7, 0, {{ loc.id }})" title="One week forward">+1W</button>
         <button class="btn btn-outline btn-sm" onclick="navShift(0, 1, {{ loc.id }})" title="One month forward">+1M</button>
@@ -484,6 +484,16 @@ function updatePageTitle() {
   if (el) el.textContent = Object.keys(evoState).length ? 'Forecast Evolution' : 'Forecast';
 }
 
+function showForecastPlot(locId) {
+  const plotEl = document.getElementById('plot-' + locId);
+  if (!plotEl) return;
+  plotEl.classList.add('visible');
+  if (!plotRendered[locId]) {
+    renderPlot(locId);
+    plotRendered[locId] = true;
+  }
+}
+
 function closeEvolution(locId) {
   const evoEl = document.getElementById('evo-' + locId);
   if (evoEl) evoEl.style.display = 'none';
@@ -498,21 +508,10 @@ function closeEvolution(locId) {
     document.getElementById('evo-conn-' + locId)?.remove();
   }
   updatePageTitle();
-}
-
-function togglePlot(locId) {
-  const plotEl  = document.getElementById('plot-' + locId);
-  const btn     = document.getElementById('plotbtn-' + locId);
-  const showing = plotEl.classList.contains('visible');
-
-  closeEvolution(locId);
-
-  if (showing) {
-    plotEl.classList.remove('visible');
-    btn.textContent = '📈 Plot Forecast';
-  } else {
+  // Always show forecast plot after closing evolution
+  const plotEl = document.getElementById('plot-' + locId);
+  if (plotEl && card?.classList.contains('open')) {
     plotEl.classList.add('visible');
-    btn.textContent = 'Close Plot';
     if (!plotRendered[locId]) {
       renderPlot(locId);
       plotRendered[locId] = true;
@@ -891,7 +890,6 @@ function navigateEvolution(locId, date, mode) {
 function openEvolution(locId, date, mode) {
   const evoEl  = document.getElementById('evo-' + locId);
   const plotEl = document.getElementById('plot-' + locId);
-  const btn    = document.getElementById('plotbtn-' + locId);
 
   const prev = evoState[locId];
   mode = mode || (prev && prev.mode) || 'daily';
@@ -902,9 +900,8 @@ function openEvolution(locId, date, mode) {
     return;
   }
 
-  if (plotEl.classList.contains('visible')) {
+  if (plotEl?.classList.contains('visible')) {
     plotEl.classList.remove('visible');
-    btn.textContent = '📈 Plot Forecast';
   }
 
   // Dim all cards except the target date column
@@ -1405,11 +1402,20 @@ function navStartTo(dateStr, locId) {
       const endD = new Date(data.dates[data.dates.length - 1]);
       const endStr = String(endD.getDate()).padStart(2, '0') + '.' + String(endD.getMonth() + 1).padStart(2, '0') + '.' + endD.getFullYear();
       document.querySelectorAll('.date-nav input[type="date"]').forEach(inp => { inp.value = dateStr; });
-      document.querySelectorAll('.date-nav > span:not(.date-nav-group)').forEach(span => {
+      document.querySelectorAll('.date-end-label').forEach(span => {
         span.textContent = '– ' + endStr;
       });
 
       renderGrid(locId);
+
+      // Re-apply evolution styling to the new day cells
+      const _evo = evoState[locId];
+      if (_evo) {
+        document.querySelectorAll(`.day-cell[data-loc="${locId}"]`).forEach(el => {
+          if (el.dataset.date === _evo.date) el.classList.add('evo-active');
+          else el.classList.add('evo-dimmed');
+        });
+      }
 
       // Re-render forecast plot if visible
       if (document.getElementById('plot-' + locId)?.classList.contains('visible')) {
@@ -1470,6 +1476,7 @@ function toggleLocationCard(locId) {
   card.classList.add('open');
   document.getElementById('ov-' + locId)?.classList.add('active');
   history.replaceState(null, '', '#loc-' + locId);
+  showForecastPlot(locId);
   window.dispatchEvent(new Event('resize')); // let Plotly recompute chart widths
   card.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
