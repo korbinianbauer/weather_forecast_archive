@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Weather Archive{% endblock %}</title>
+  <title>{% block title %}Bether{% endblock %}</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -136,8 +136,8 @@
 <body>
 
 <nav>
-  <a href="/">&#9925; Weather Archive</a>
-  <span class="nav-subtitle" style="flex:1;">Wetter.com &amp; Meteoblue · forecast history</span>
+  <a href="/">⛅ Bether</a>
+  <span class="nav-subtitle" style="flex:1;">Weather Forecast Accumulator and Archive</span>
   {% if session.logged_in %}
   <a href="{{ url_for('settings_page') }}" style="color:rgba(255,255,255,.75); font-size:.82rem; font-weight:500; text-decoration:none;">⚙ Settings</a>
   {% endif %}
