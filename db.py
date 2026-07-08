@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 from contextlib import contextmanager
+from datetime import date as _date, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'weather.db')
 
@@ -582,9 +583,13 @@ def get_existing_forecast_times(location_id: int, provider: str) -> set[tuple[st
 
 
 def get_unobserved_forecast_dates(location_id: int, observation_provider: str) -> set[str]:
-    """Forecast dates that lack observation data from *observation_provider*."""
+    """Forecast dates that lack observation data from *observation_provider*.
+
+    Checks per-granularity (daily / hourly) so a date with only hourly
+    observations still triggers a daily fetch, and vice versa.  Also includes
+    recent dates (last 7 days) so observations are always fetched for them."""
     with get_db() as conn:
-        return {r[0] for r in conn.execute(
+        dates = {r[0] for r in conn.execute(
             '''SELECT DISTINCT date(f.forecast_time)
                FROM forecast_snapshots f
                WHERE f.location_id = ? AND f.provider != ?
@@ -593,9 +598,22 @@ def get_unobserved_forecast_dates(location_id: int, observation_provider: str) -
                  WHERE o.location_id = f.location_id
                    AND o.provider = ?
                    AND date(o.forecast_time) = date(f.forecast_time)
+                   AND o.granularity = f.granularity
                )''',
             (location_id, observation_provider, observation_provider),
         )}
+        today = _date.today()
+        for i in range(7):
+            d = (today - timedelta(days=i)).isoformat()
+            for gran in ('daily', 'hourly'):
+                has = conn.execute(
+                    'SELECT 1 FROM forecast_snapshots WHERE location_id=? AND provider=? AND granularity=? AND date(forecast_time)=? LIMIT 1',
+                    (location_id, observation_provider, gran, d),
+                ).fetchone()
+                if not has:
+                    dates.add(d)
+                    break
+        return dates
 
 
 def get_imported_dwd_ids() -> set[str]:

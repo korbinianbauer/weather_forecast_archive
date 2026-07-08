@@ -462,7 +462,8 @@ def _median_evolution_rows(rows: list[dict]) -> list[dict]:
     return result
 
 
-def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dict]:
+def _build_evolution_traces(rows: list[dict], provider_labels: dict,
+                            target_date: str | None = None) -> list[dict]:
     if not rows:
         return []
 
@@ -476,9 +477,14 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
 
     # Observations are archived once per forecast_time, so they would show as
     # a lone point — stretch the measured value into a horizontal reference
-    # line across the full poll range instead.
-    x_min = min(r['fetched_at'] for r in rows)
-    x_max = max(r['fetched_at'] for r in rows)
+    # line across the full evolution x-range instead.
+    if target_date:
+        ref = datetime.fromisoformat(target_date)
+        ref_x_min = (ref - timedelta(days=16)).isoformat()
+        ref_x_max = (ref + timedelta(days=1)).isoformat()
+    else:
+        ref_x_min = min(r['fetched_at'] for r in rows)
+        ref_x_max = max(r['fetched_at'] for r in rows)
     obs_labels: set[str] = set()
 
     all_traces = []
@@ -487,10 +493,9 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
     for (provider, granularity), entries in sorted(groups.items()):
         if provider in _OBSERVATION_PROVIDERS:
             obs_labels.add(provider_labels.get(provider, provider))
-            if x_max > x_min:
-                last = entries[-1]
-                entries = [{**last, 'fetched_at': x_min},
-                           {**last, 'fetched_at': x_max}]
+            last = entries[-1]
+            entries = [{**last, 'fetched_at': ref_x_min},
+                       {**last, 'fetched_at': ref_x_max}]
         hex_color  = provider_colors.get(provider, _DEFAULT_COLOR_HEX)
         color      = _rgba(hex_color, 1.0)
         fill_color = _rgba(hex_color, 0.15)
@@ -937,7 +942,7 @@ def api_evolution(location_id):
     else:
         rows = db.get_forecast_evolution(location_id, target_date, all_provider_names)
         rows = rows + _median_evolution_rows(rows)
-        traces = _build_evolution_traces(rows, provider_labels_map)
+        traces = _build_evolution_traces(rows, provider_labels_map, target_date)
     # Draw the median as a dashed line so it stands out as synthetic
     for t in traces:
         if t.get('legendgroup') == 'Median' and t.get('line', {}).get('width'):
