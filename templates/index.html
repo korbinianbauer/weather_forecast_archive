@@ -1476,6 +1476,7 @@ function toggleLocationCard(locId) {
   card.classList.add('open');
   document.getElementById('ov-' + locId)?.classList.add('active');
   history.replaceState(null, '', '#loc-' + locId);
+  closeEvolution(locId);
   showForecastPlot(locId);
   window.dispatchEvent(new Event('resize')); // let Plotly recompute chart widths
 }
