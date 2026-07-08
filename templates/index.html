@@ -611,8 +611,10 @@ function renderEvolutionInline(locId, data) {
     const spacer = document.createElement('div');
     spacer.style.minHeight = '400px';
     fragment.appendChild(spacer);
+    const sy = window.scrollY;
     container.style.minHeight = '';
     container.replaceChildren(fragment);
+    requestAnimationFrame(() => window.scrollTo(0, sy));
     return;
   }
 
@@ -747,9 +749,12 @@ function renderEvolutionInline(locId, data) {
     divIds.push(divId);
   }
 
-  // Atomic swap: replace old content with the new fragment
+  // Atomic swap: replace old content with the new fragment; keep the
+  // viewport anchored so the height change doesn't shift the page.
+  const _swapScrollY = window.scrollY;
   container.style.minHeight = '';
   container.replaceChildren(fragment);
+  requestAnimationFrame(() => window.scrollTo(0, _swapScrollY));
 
   const traceMap = {};
   for (let mi = 0; mi < allMetrics.length; mi++) {
@@ -883,7 +888,11 @@ function openEvolution(locId, date, mode) {
     return;
   }
 
+  // Keep the card height stable while evolution data loads: reserve the
+  // space the forecast plot occupied so the viewport doesn't jump.
+  let holdH = 400;
   if (plotEl?.classList.contains('visible')) {
+    holdH = Math.max(holdH, plotEl.offsetHeight);
     plotEl.classList.remove('visible');
   }
 
@@ -901,7 +910,7 @@ function openEvolution(locId, date, mode) {
   evoEl.style.display = '';
 
   const chartsEl = document.getElementById('evo-charts-' + locId);
-  chartsEl.style.minHeight = '400px';
+  chartsEl.style.minHeight = holdH + 'px';
 
   fetch(`/api/location/${locId}/evolution?date=${encodeURIComponent(date)}&mode=${mode}`)
     .then(r => r.json())
