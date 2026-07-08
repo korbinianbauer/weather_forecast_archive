@@ -174,11 +174,12 @@
         <div class="loc-menu-wrap">
           <button class="loc-menu-btn" onclick="toggleLocMenu(event, this)" title="Actions">⋮</button>
           <div class="loc-menu">
-            <button class="loc-menu-item" onclick="refreshLocation(this, {{ loc.id }}, '{{ csrf_token() }}')">↻ Refresh</button>
+            <button class="loc-menu-item" onclick="refreshLocation(this, {{ loc.id }}, '{{ csrf_token() }}')">↻ Refresh forecasts</button>
+            <button class="loc-menu-item" onclick="hideLocation({{ loc.id }}, '{{ csrf_token() }}')">{% if loc.hidden %}👁 Show on front page{% else %}👁 Hide from front page{% endif %}</button>
             <form method="post" action="{{ url_for('delete_location', location_id=loc.id) }}"
-                  onsubmit="return confirm('Remove {{ loc.name }}?')" style="margin:0;">
+                  onsubmit="return confirm('Remove {{ loc.name }} and all its data?')" style="margin:0;">
               <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-              <button class="loc-menu-item danger">🗑 Remove</button>
+              <button class="loc-menu-item danger">🗑 Remove location and all data</button>
             </form>
           </div>
         </div>
@@ -1616,6 +1617,12 @@ function toggleLocMenu(ev, btn) {
 document.addEventListener('click', () => {
   document.querySelectorAll('.loc-menu.open').forEach(el => el.classList.remove('open'));
 });
+function hideLocation(locId, csrf) {
+  fetch(`/location/${locId}/toggle_hidden`, {
+    method: 'POST',
+    headers: { 'X-CSRF-Token': csrf },
+  }).then(() => location.reload());
+}
 </script>
 
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
