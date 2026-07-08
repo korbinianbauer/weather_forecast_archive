@@ -764,6 +764,9 @@ function renderEvolutionInline(locId, data) {
     const yr = yRangeFromTraces(traces, metric, data.pressure_range);
     Plotly.newPlot(divId, traces, {
       margin: { t: 8, b: 50, l: 50, r: 12 },
+      // dragmode false makes Plotly skip preventDefault on touchstart,
+      // so vertical swipes over a plot still scroll the page on mobile
+      dragmode: false,
       xaxis: xaxisLayout,
       yaxis: { gridcolor: '#e2e8f0', zeroline: false, fixedrange: true,
                ...(yr ? { range: yr, autorange: false } : {}) },
@@ -1229,6 +1232,7 @@ function renderPlot(locId) {
     const yr = yRangeFromTraces(traces, metric.id, loc.pressureRange);
     const layout = {
       margin: { t: 8, b: 36, l: 50, r: 12 },
+      dragmode: false,   // don't swallow touch events — allow page scroll on mobile
       xaxis: {
         type: 'date',
         showgrid: false,
