@@ -621,21 +621,20 @@
 
       <div class="eval-fgroup">
         <label>From</label>
-        <input type="date" id="eval-date-start" value="{{ year_ago_iso }}">
+        <input type="date" id="eval-date-start" value="{{ year_ago_iso }}" onchange="evalUpdate()">
       </div>
       <div class="eval-fgroup">
         <label>To</label>
-        <input type="date" id="eval-date-end" value="{{ today_iso }}">
+        <input type="date" id="eval-date-end" value="{{ today_iso }}" onchange="evalUpdate()">
       </div>
       <div class="eval-fgroup">
         <label>Ground Truth</label>
-        <select id="eval-gt-source">
+        <select id="eval-gt-source" onchange="evalUpdate()">
           <option value="auto">Auto (DWD preferred)</option>
           <option value="dwd">DWD observations only</option>
           <option value="average">Average forecast only</option>
         </select>
       </div>
-      <button class="btn btn-primary" onclick="evalUpdate()">Update</button>
     </div>
 
     {# ── provider checkboxes ── #}
@@ -899,6 +898,8 @@ function evalLoadProviders() {
   const locId = document.getElementById('eval-location').value;
   if (!locId) return;
   const labels = {{ provider_labels | tojson }};
+  const colors = {{ provider_colors | tojson }};
+  const defaultSwatch = '#a855f7';
   const forecastProvs = Object.keys(labels).filter(p => p !== 'dwd');
   let providers;
   if (locId === 'all' || locId === 'all_dwd') {
@@ -910,28 +911,34 @@ function evalLoadProviders() {
       .map(s => s.provider);
   }
   evalProvDiv.innerHTML = '';
-  for (const p of providers) {
-    const label = labels[p] || p;
-    const chk = document.createElement('label');
-    chk.className = 'eval-prov-item';
-    chk.innerHTML = `<input type="checkbox" checked data-prov="${p}">
-      <span class="eval-prov-swatch" style="background:#a855f7"></span> ${label}`;
-    chk.querySelector('input').addEventListener('change', evalUpdate);
-    evalProvDiv.appendChild(chk);
-  }
-  const avg = document.createElement('label');
-  avg.className = 'eval-prov-item';
-  avg.innerHTML = `<input type="checkbox" checked data-prov="average">
-    <span class="eval-prov-swatch" style="background:#8b5cf6"></span> Average`;
-  avg.querySelector('input').addEventListener('change', evalUpdate);
-  evalProvDiv.appendChild(avg);
 
-  const med = document.createElement('label');
-  med.className = 'eval-prov-item';
-  med.innerHTML = `<input type="checkbox" checked data-prov="median">
-    <span class="eval-prov-swatch" style="background:#111827"></span> Median`;
-  med.querySelector('input').addEventListener('change', evalUpdate);
-  evalProvDiv.appendChild(med);
+  function addSection(headerText, provList) {
+    if (!provList.length) return;
+    const hdr = document.createElement('div');
+    hdr.className = 'plot-legend-header';
+    hdr.textContent = headerText;
+    evalProvDiv.appendChild(hdr);
+    for (const p of provList) {
+      const label = labels[p] || p;
+      const swatch = colors[p] || defaultSwatch;
+      const chk = document.createElement('label');
+      chk.className = 'eval-prov-item';
+      chk.innerHTML = `<input type="checkbox" checked data-prov="${p}">
+        <span class="eval-prov-swatch" style="background:${swatch}"></span> ${label}`;
+      chk.querySelector('input').addEventListener('change', evalUpdate);
+      evalProvDiv.appendChild(chk);
+    }
+  }
+
+  addSection('Forecast', providers);
+  addSection('Combine', ['average', 'median']);
+
+  // Default: Average checked, Median unchecked (matching forecast view)
+  const avgChk = evalProvDiv.querySelector('input[data-prov="average"]');
+  const medChk = evalProvDiv.querySelector('input[data-prov="median"]');
+  if (avgChk) avgChk.checked = true;
+  if (medChk) medChk.checked = false;
+
   evalUpdate();
 }
 
