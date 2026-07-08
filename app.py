@@ -505,23 +505,30 @@ def _build_evolution_traces(rows: list[dict], provider_labels: dict) -> list[dic
         has_t   = any(v is not None for v in yt)
 
         if has_max and has_min:
+            show = label not in legend_shown
+            if show:
+                legend_shown.add(label)
             all_traces.append({
                 'x': xs, 'y': ymx,
-                'type': 'scatter', 'mode': 'lines',
-                'line': {'width': 0}, 'showlegend': False,
-                'hoverinfo': 'skip', 'metric': 'temperature',
-                'legendgroup': label,
+                'type': 'scatter', 'mode': 'lines+markers',
+                'name': label, 'showlegend': show,
+                'line': {'color': color, 'width': 2},
+                'marker': {'size': 6, 'color': color, 'symbol': 'triangle-up'},
+                'metric': 'temperature', 'legendgroup': label,
+                'customdata': ymn,
+                'hovertemplate': f'{label}: %{{customdata}}° - %{{y}}°<extra></extra>',
             })
             all_traces.append({
                 'x': xs, 'y': ymn,
-                'type': 'scatter', 'mode': 'lines',
+                'type': 'scatter', 'mode': 'lines+markers',
                 'fill': 'tonexty', 'fillcolor': fill_color,
-                'line': {'width': 0}, 'showlegend': False,
-                'hoverinfo': 'skip', 'metric': 'temperature',
-                'legendgroup': label,
+                'name': label, 'showlegend': False,
+                'line': {'color': color, 'width': 2},
+                'marker': {'size': 6, 'color': color, 'symbol': 'triangle-down'},
+                'metric': 'temperature', 'legendgroup': label,
+                'hoverinfo': 'skip',
             })
-
-        if has_t:
+        elif has_t:
             show = label not in legend_shown
             if show:
                 legend_shown.add(label)

@@ -723,6 +723,7 @@ function renderEvolutionInline(locId, data) {
                ...(yr ? { range: yr, autorange: false } : {}) },
       paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: '#f8fafc',
       showlegend: false, hovermode: 'x unified',
+      hoverlabel: { bgcolor: 'rgba(220,220,220,0.85)' },
       font: { family: 'system-ui, -apple-system, sans-serif', size: 12 },
       shapes: allChartShapes,
     }, { responsive: true, displayModeBar: false });
@@ -1072,6 +1073,7 @@ function renderPlot(locId) {
       plot_bgcolor: '#f8fafc',
       showlegend: false,
       hovermode: 'x unified',
+      hoverlabel: { bgcolor: 'rgba(220,220,220,0.85)' },
       font: { family: 'system-ui,-apple-system,sans-serif', size: 11 },
       shapes: axDec.shapes,
     };
@@ -1141,19 +1143,22 @@ function buildTempTraces(rows, dates) {
 
     if (hasMx && hasMn) {
       traces.push({
-        x: xs, y: ymx, type: 'scatter', mode: 'lines',
-        line: { width: 0 }, showlegend: false, hoverinfo: 'skip',
+        x: xs, y: ymx, type: 'scatter', mode: 'lines+markers',
+        line: { color: line, width: 2 }, showlegend: false,
         name: row.label, _provider: row.provider,
+        marker: { size: 5, color: line, symbol: 'triangle-up' },
+        connectgaps: false, customdata: ymn,
+        hovertemplate: `${row.label}: %{customdata}° - %{y}°<extra></extra>`,
       });
       traces.push({
-        x: xs, y: ymn, type: 'scatter', mode: 'lines',
+        x: xs, y: ymn, type: 'scatter', mode: 'lines+markers',
         fill: 'tonexty', fillcolor: fill,
-        line: { width: 0 }, showlegend: false, hoverinfo: 'skip',
-        name: row.label, _provider: row.provider,
+        line: { color: line, width: 2 }, showlegend: false,
+        name: row.label, _provider: row.provider, hoverinfo: 'skip',
+        marker: { size: 5, color: line, symbol: 'triangle-down' },
+        connectgaps: false,
       });
-    }
-
-    if (hasT) {
+    } else if (hasT) {
       traces.push({
         x: xs, y: yt, type: 'scatter', mode: 'lines+markers',
         name: row.label, showlegend: false, _provider: row.provider,
