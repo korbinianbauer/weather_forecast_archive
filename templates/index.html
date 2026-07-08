@@ -1462,10 +1462,11 @@ function toggleLocationCard(locId) {
   window.dispatchEvent(new Event('resize')); // let Plotly recompute chart widths
 }
 
-// Restore the open card across reloads (e.g. after a poll finishes)
-{
-  const m = location.hash.match(/^#loc-(\d+)$/);
-  if (m && document.getElementById('card-' + m[1])) toggleLocationCard(+m[1]);
+// Don't restore the open card on reload — Plotly isn't loaded yet and
+// trying to render the forecast chart would glitch.  The hash is only
+// kept for URL sharing via date-navigation links.
+if (location.hash.startsWith('#loc-')) {
+  history.replaceState(null, '', location.pathname + location.search);
 }
 
 // Reload the page, but never while the Add-Location dialog is open —
