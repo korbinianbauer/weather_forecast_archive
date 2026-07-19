@@ -164,6 +164,15 @@ def logout():
     return redirect(url_for('index'))
 
 
+@app.route('/favicon.svg')
+def favicon_svg():
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+           '<circle cx="50" cy="50" r="45" fill="#1a6fb5"/>'
+           '<text x="50" y="62" text-anchor="middle" font-size="36" fill="white">B</text>'
+           '</svg>')
+    return svg, 200, {'Content-Type': 'image/svg+xml'}
+
+
 # ── template helpers ──────────────────────────────────────────────────────────
 
 @app.template_filter('dt')
@@ -1274,11 +1283,11 @@ def settings_page():
                     'provider': pname,
                     'provider_label': prov.display_name,
                     'id': s['id'],
-                    'name': s['name'],
-                    'state': s['state'],
+                    'name': s.get('name', f"Station {s['id']}"),
+                    'state': s.get('state', ''),
                     'latitude': s['latitude'],
                     'longitude': s['longitude'],
-                    'height': s['height'],
+                    'height': s.get('height'),
                     'imported': s['id'] in used_ids,
                 })
 
@@ -1435,20 +1444,24 @@ def import_stations():
         for provider_name, station_ids in by_provider.items():
             all_stations = {s['id']: s for s in providers.get(provider_name).all_stations()}
             already = db.get_imported_station_ids(provider_name)
+            prov = providers.get(provider_name)
             for sid in station_ids:
                 if sid in already:
                     continue
-                station = all_stations.get(sid)
+                station = dict(all_stations.get(sid, {}))
                 if not station:
                     continue
+                # Resolve real name for providers that use lazy naming (e.g. AWEKAS)
+                if station.get('name', '').startswith('Station ') and hasattr(prov, 'resolve_station_name'):
+                    station['name'] = prov.resolve_station_name(sid)
                 loc_id = db.add_location(
                     station['name'], station['latitude'], station['longitude'],
                     hidden=True,
                 )
                 db.add_location_source(loc_id, provider_name, sid, {
                     'station_name': station['name'],
-                    'state': station['state'],
-                    'height': station['height'],
+                    'state': station.get('state', ''),
+                    'height': station.get('height'),
                     'imported_station': True,
                 })
                 new_locations.append((loc_id, station))
@@ -1461,20 +1474,32 @@ def import_stations():
             try:
                 search_cache: dict[tuple[str, str], list] = {}
                 for idx, (loc_id, station) in enumerate(new_locations):
-                    city = (station['name'].split('-')[0].split('(')[0]
-                            .split('/')[0].strip())
+                    raw = station['name']
+                    # Build a list of progressively shorter city candidates:
+                    # "Innsbruck/Alpenzoo" -> "Innsbruck", "München-Ramersdorf" -> "München"
+                    # "Innsbruck Uni." -> "Innsbruck Uni.", "Innsbruck"
+                    # "Wien-Innere Stadt" -> "Wien"
+                    base = raw.split('-')[0].split('(')[0].split('/')[0].strip()
+                    candidates = [base]
+                    first_word = base.split()[0] if ' ' in base else None
+                    if first_word and first_word != base:
+                        candidates.append(first_word)
                     for pname in ('wetter_com', 'meteoblue', 'wetteronline'):
-                        key = (pname, city)
-                        if key not in search_cache:
-                            # Rate-limit: 1.5s between provider searches
-                            if idx > 0 or search_cache:
-                                time.sleep(1.5)
-                            try:
-                                search_cache[key] = providers.get(pname).search(city)
-                            except Exception:
-                                search_cache[key] = []
-                        best = _closest_result(search_cache[key],
-                                               station['latitude'], station['longitude'])
+                        best = None
+                        for city in candidates:
+                            key = (pname, city)
+                            if key not in search_cache:
+                                # Rate-limit: 1.5s between provider searches
+                                if idx > 0 or search_cache:
+                                    time.sleep(1.5)
+                                try:
+                                    search_cache[key] = providers.get(pname).search(city)
+                                except Exception:
+                                    search_cache[key] = []
+                            best = _closest_result(search_cache[key],
+                                                   station['latitude'], station['longitude'])
+                            if best:
+                                break
                         if best:
                             db.add_location_source(
                                 loc_id, pname,

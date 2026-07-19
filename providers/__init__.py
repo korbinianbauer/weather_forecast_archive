@@ -1,3 +1,4 @@
+from .awekas import AwekasProvider
 from .base import ForecastEntry, LocationResult, WeatherProvider
 from .dwd import DwdProvider
 from .lwd_bayern import LwdBayernProvider
@@ -14,6 +15,7 @@ _all: list[WeatherProvider] = [
     LwdBayernProvider(),
     LwdTirolProvider(),
     HdTirolProvider(),
+    AwekasProvider(),
 ]
 
 REGISTRY: dict[str, WeatherProvider] = {p.name: p for p in _all}

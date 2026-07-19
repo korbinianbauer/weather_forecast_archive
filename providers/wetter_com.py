@@ -36,6 +36,9 @@ class WetterComProvider(WeatherProvider):
                 timeout=10,
             )
             resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, dict):
+                return []
             return [
                 LocationResult(
                     name=item['title'].split(' - ')[0],
@@ -44,7 +47,7 @@ class WetterComProvider(WeatherProvider):
                     longitude=item.get('longitude'),
                     extra={'seo_string': item['seoString'], 'title': item['title']},
                 )
-                for item in resp.json().get('locations', [])
+                for item in data.get('locations', [])
             ]
         except Exception as e:
             logger.error('Wetter.com search failed: %s', e)
