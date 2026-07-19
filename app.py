@@ -257,7 +257,7 @@ def _current_weather(location_id: int, provider: str) -> dict | None:
 
 @app.route('/')
 def index():
-    locs = db.get_locations()
+    locs = db.get_locations(show_hidden=True)
     provider_labels = {p.name: p.display_name for p in providers.all_providers()}
 
     default_start = _date.today().isoformat()
@@ -279,7 +279,10 @@ def index():
         rows = []
 
         configured_providers = {s['provider'] for s in sources}
-        for source in sources:
+        # Hidden locations get only a card skeleton (no overview card, no
+        # forecast queries) — opening them from the map loads the data via
+        # /api/location/<id>/grid-data.
+        for source in (sources if not loc.get('hidden') else []):
             # Per date, the most recent archived forecast — so past days keep
             # showing the last forecast that covered them.
             entries = db.get_latest_forecast_per_date(
@@ -301,20 +304,38 @@ def index():
             sources[0]['provider'] if sources else None)
         obs_providers = [p for p in _OBSERVATION_PROVIDER_ORDER
                          if p in configured_providers]
+        hidden = bool(loc.get('hidden'))
         location_data.append({
             'location': loc,
             'all_dates': window_dates,
             'rows': rows,
             'available_providers': available_providers,
-            'pressure_range': db.get_metric_range(loc['id'], 'pressure'),
-            'current': _current_weather(loc['id'], first_provider) if first_provider else None,
+            'pressure_range': None if hidden else db.get_metric_range(loc['id'], 'pressure'),
+            'current': _current_weather(loc['id'], first_provider) if first_provider and not hidden else None,
             'current_provider': first_provider,
             'obs_providers': obs_providers,
+        })
+
+    # Map: all tracked locations, including hidden ones.
+    map_locations = []
+    for loc in locs:
+        if loc['latitude'] is None or loc['longitude'] is None:
+            continue
+        loc_providers = set((loc.get('providers') or '').split(', '))
+        map_locations.append({
+            'id': loc['id'],
+            'name': loc['name'],
+            'lat': loc['latitude'],
+            'lon': loc['longitude'],
+            'obs_provider': next((p for p in _OBSERVATION_PROVIDER_ORDER
+                                  if p in loc_providers), None),
+            'visible': not loc.get('hidden'),
         })
 
     r = make_response(render_template(
         'index.html',
         location_data=location_data,
+        map_locations=map_locations,
         provider_labels=provider_labels,
         all_providers=providers.all_providers(),
         date_start=date_start,

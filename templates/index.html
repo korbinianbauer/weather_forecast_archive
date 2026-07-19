@@ -125,6 +125,7 @@
     {% for item in location_data %}
     {% set loc = item.location %}
     {% set cur = item.current %}
+    {% if not loc.hidden %}
     <div class="ov-card" id="ov-{{ loc.id }}" onclick="toggleLocationCard({{ loc.id }})"
          title="Show forecast details for {{ loc.name }}">
       <div class="ov-name">{{ loc.name }}
@@ -154,8 +155,19 @@
         <div class="ov-meta">{{ provider_labels.get(item.current_provider, item.current_provider or '—') }}</div>
       {% endif %}
     </div>
+    {% endif %}
     {% endfor %}
   </div>
+
+  {# ── map of tracked locations; clicking a marker opens the detail view below ── #}
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <div class="card gap" id="map-card" style="padding:0; overflow:hidden;">
+    <div id="loc-map"></div>
+  </div>
+  <style>
+    #loc-map { height: 510px; width: 100%; }
+    @media (max-width: 640px) { #loc-map { height: 360px; } }
+  </style>
 
   {% for item in location_data %}
   {% set loc = item.location %}
@@ -1782,4 +1794,46 @@ function hideLocation(locId, csrf) {
 </script>
 
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+
+{% if location_data %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function () {
+  const MAP_LOCS = {{ map_locations | tojson }};
+  const MAP_COLORS = {{ provider_colors | tojson }};
+  if (!MAP_LOCS.length) {
+    document.getElementById('map-card').style.display = 'none';
+    return;
+  }
+  // One-finger drag must keep scrolling the page on mobile (two-finger
+  // pinch still zooms/pans); on desktop, wheel scroll stays page scroll.
+  const map = L.map('loc-map', { scrollWheelZoom: false, dragging: !L.Browser.mobile });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  }).addTo(map);
+  for (const l of MAP_LOCS) {
+    // Station locations get their provider color, plain locations light grey.
+    const color = (l.obs_provider && MAP_COLORS[l.obs_provider]) || '#d1d5db';
+    const m = L.circleMarker([l.lat, l.lon], {
+      radius: 6, color: '#ffffff', weight: 1, fillColor: color, fillOpacity: .9,
+    });
+    m.bindTooltip(l.name + (l.visible ? '' : ' · hidden'));
+    m.on('click', () => {
+      const card = document.getElementById('card-' + l.id);
+      if (!card) return;
+      if (!card.classList.contains('open')) toggleLocationCard(l.id);
+      // Hidden locations ship as empty skeletons — load their data on demand.
+      if (!l.visible && !card.dataset.loaded) {
+        card.dataset.loaded = '1';
+        navStartTo(_dateStart, l.id);
+      }
+      card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    m.addTo(map);
+  }
+  map.fitBounds(L.latLngBounds(MAP_LOCS.map(l => [l.lat, l.lon])), { padding: [20, 20], maxZoom: 11 });
+})();
+</script>
+{% endif %}
 {% endblock %}
