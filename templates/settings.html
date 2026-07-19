@@ -334,92 +334,62 @@
         Drag rows to reorder. Order is saved automatically.
       </div>
     </details>
-    {% elif not dwd_locations %}
+    {% elif not station_locations.values()|map('length')|sum %}
     <div class="empty-state">
       <p>No locations yet. <a href="{{ url_for('index') }}?add=1">Add one →</a></p>
     </div>
     {% endif %}
 
-    {% if dwd_locations %}
+    {% for pname, locs in station_locations.items() if locs %}
     <details style="margin-top:1.5rem;">
       <summary style="cursor:pointer; font-weight:600; font-size:1rem; padding:.4rem 0;">
-        DWD stations ({{ dwd_locations|length }})
+        {{ provider_labels.get(pname, pname) }} stations ({{ locs|length }})
       </summary>
       <div class="loc-list" style="max-width:620px; margin-top:.75rem;">
-        {% for loc in dwd_locations %}
+        {% for loc in locs %}
         {% set srcs = location_sources.get(loc.id, []) %}
         {% set avail = available_providers_by_loc.get(loc.id, []) %}
         {% include "_location_item.html" %}
         {% endfor %}
       </div>
     </details>
-    {% endif %}
+    {% endfor %}
 
-    <details style="margin-top:1.5rem;" {% if dwd_stations_by_state %}open{% endif %}>
+    <details style="margin-top:1.5rem;" {% if station_import.stations %}open{% endif %} id="stationImport">
       <summary style="cursor:pointer; font-weight:600; font-size:1rem; padding:.4rem 0;">
-        Import DWD weather stations
+        Import weather stations
       </summary>
 
-      {% if dwd_stations_by_state %}
+      {% if station_import.errors %}
+      <div style="font-size:.85rem; color:var(--danger); margin-top:.5rem;">
+        Could not load station list: {{ station_import.errors|join(', ') }}.
+      </div>
+      {% endif %}
+
+      {% if station_import.stations %}
+      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
       <div style="display:flex; gap:1rem; align-items:center; margin:.75rem 0; flex-wrap:wrap;">
-        <input type="text" id="dwdFilter" placeholder="Filter by name…"
+        <input type="text" id="stFilter" placeholder="Search station by name…"
                style="padding:.4rem .6rem; width:250px; border:1px solid var(--border); border-radius:6px;
                       font-size:.85rem; background:var(--surface); color:var(--text);"
-               oninput="filterDwdStations()">
-        <span style="font-size:.85rem;">
-          <a href="#" onclick="selectAllDwd(true); return false;">Select all</a>
-          &middot;
-          <a href="#" onclick="selectAllDwd(false); return false;">Deselect all</a>
-        </span>
-        <span id="dwdSelectedCount" style="font-size:.85rem; color:var(--muted);">0 selected</span>
+               oninput="stFilterChanged()">
+        <span id="stLegend" style="display:flex; gap:.9rem; align-items:center; font-size:.82rem;"></span>
+        <span id="stSelectedCount" style="font-size:.85rem; color:var(--muted); margin-left:auto;">0 selected</span>
       </div>
 
-      <form id="dwdImportForm" method="post" action="{{ url_for('import_dwd_stations') }}"
-            style="max-width:620px;">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <div id="dwdStationList" style="max-height:500px; overflow-y:auto; border:1px solid var(--border);
-              border-radius:6px; padding:.35rem .5rem; background:var(--surface);">
-          {% for state, stations in dwd_stations_by_state %}
-          <div class="dwd-state-group" data-state="{{ state }}">
-            <div style="display:flex; align-items:center; gap:.5rem; padding:.35rem .4rem;
-                        cursor:pointer; border-radius:4px; user-select:none;"
-                 onclick="toggleDwdState(this)">
-              <span style="font-weight:600; font-size:.85rem;">{{ state }}</span>
-              <span style="font-size:.75rem; color:var(--muted);">({{ stations|length }})</span>
-              <span style="margin-left:auto; font-size:.8rem;">
-                <a href="#" onclick="event.stopPropagation(); selectAllInState(this, true); return false;">All</a>
-                &middot;
-                <a href="#" onclick="event.stopPropagation(); selectAllInState(this, false); return false;">None</a>
-              </span>
-            </div>
-            <div class="dwd-station-list" style="display:none; padding-left:.6rem;">
-              {% for s in stations %}
-              <label class="dwd-station-label" data-name="{{ s.name|lower }}"
-                     style="display:flex; align-items:center; gap:.5rem; padding:.12rem .3rem; font-size:.82rem; cursor:pointer;">
-                <input type="checkbox" name="station_id" value="{{ s.id }}"
-                       class="dwd-checkbox" {% if s.imported %}disabled checked{% endif %}>
-                <span style="{% if s.imported %}color:var(--muted);{% endif %}">{{ s.name }}</span>
-                {% if s.imported %}
-                <span style="font-size:.72rem; color:var(--muted); margin-left:auto;">✓ imported</span>
-                {% endif %}
-              </label>
-              {% endfor %}
-            </div>
-          </div>
-          {% endfor %}
-        </div>
+      <div id="stationMap"
+           style="height:480px; max-width:860px; border:1px solid var(--border); border-radius:6px;"></div>
 
+      <form method="post" action="{{ url_for('import_stations') }}" id="stImportForm"
+            style="max-width:860px;" onsubmit="stInjectSelection()">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <div id="stSelectedList" style="display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.6rem;"></div>
         <div style="margin-top:.75rem;">
-          <button type="submit" class="btn btn-primary" id="importDwdBtn" disabled
-                  onclick="document.getElementById('importDwdBtn').disabled=true; this.form.submit();">
+          <button type="submit" class="btn btn-primary" id="importStationsBtn" disabled>
             Import selected (0)
           </button>
         </div>
       </form>
-      {% else %}
-      <div style="font-size:.85rem; color:var(--muted); margin-top:.5rem;">
-        Could not load DWD station list.
-      </div>
       {% endif %}
     </details>
 
@@ -592,7 +562,7 @@
       .eval-prov-item input { accent-color: var(--primary); }
       .eval-prov-swatch { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; border: 1px solid rgba(0,0,0,.15); }
       .eval-gt-badge { display: inline-flex; align-items: center; gap: .4rem; padding: .3rem .7rem; border-radius: 6px; font-size: .78rem; font-weight: 600; margin-bottom: 1rem; }
-      .eval-gt-dwd { background: #dbeafe; color: #1e40af; }
+      .eval-gt-station { background: #dbeafe; color: #1e40af; }
       .eval-gt-med { background: #fef3c7; color: #92400e; }
       .eval-empty { text-align: center; padding: 3rem 1rem; color: var(--muted); font-size: .9rem; }
       .eval-loading { text-align: center; padding: 3rem 1rem; color: var(--muted); }
@@ -616,7 +586,9 @@
         <label>Location</label>
         <select id="eval-location" onchange="evalLoadProviders()">
           <option value="all" selected>All locations</option>
-          <option value="all_dwd">All DWD locations</option>
+          {% for op in observation_providers %}
+          <option value="all_{{ op }}">All {{ provider_labels.get(op, op) }} locations</option>
+          {% endfor %}
           <option disabled>&mdash;&mdash;&mdash;</option>
           {% for loc in all_locations %}
           <option value="{{ loc.id }}">{{ loc.name }}</option>
@@ -635,8 +607,10 @@
       <div class="eval-fgroup">
         <label>Ground Truth</label>
         <select id="eval-gt-source" onchange="evalUpdate()">
-          <option value="auto">Auto (DWD preferred)</option>
-          <option value="dwd">DWD observations only</option>
+          <option value="auto">Auto (weather stations preferred)</option>
+          {% for op in observation_providers %}
+          <option value="{{ op }}">{{ provider_labels.get(op, op) }} observations only</option>
+          {% endfor %}
           <option value="average">Average forecast only</option>
         </select>
       </div>
@@ -662,6 +636,9 @@
 {% endblock %}
 
 {% block scripts %}
+{% if tab == 'locations' and station_import and station_import.stations %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+{% endif %}
 <script>
 const CSRF = {{ csrf_token() | tojson }};
 
@@ -904,15 +881,16 @@ function evalLoadProviders() {
   if (!locId) return;
   const labels = {{ provider_labels | tojson }};
   const colors = {{ provider_colors | tojson }};
+  const OBS_PROVIDERS = new Set({{ observation_providers | tojson }});
   const defaultSwatch = '#a855f7';
-  const forecastProvs = Object.keys(labels).filter(p => p !== 'dwd');
+  const forecastProvs = Object.keys(labels).filter(p => !OBS_PROVIDERS.has(p));
   let providers;
-  if (locId === 'all' || locId === 'all_dwd') {
+  if (locId === 'all' || locId.startsWith('all_')) {
     providers = forecastProvs;
   } else {
     const srcs = {{ location_sources | tojson }};
     providers = (srcs[locId] || [])
-      .filter(s => s.provider !== 'dwd')
+      .filter(s => !OBS_PROVIDERS.has(s.provider))
       .map(s => s.provider);
   }
   evalProvDiv.innerHTML = '';
@@ -981,10 +959,10 @@ async function evalUpdate() {
 
     // Ground truth badge
     const src = data.ground_truth_source || '';
-    const isDwd = src.includes('DWD');
+    const isStation = !!data.gt_is_station;
     evalGtBadge.style.display = 'inline-flex';
-    evalGtBadge.className = 'eval-gt-badge ' + (isDwd ? 'eval-gt-dwd' : 'eval-gt-med');
-    evalGtBadge.innerHTML = (isDwd ? '&#x1F4CA; ' : '&#x26A0; ') + src + ' &middot; ' + data.n_dates + ' location-days';
+    evalGtBadge.className = 'eval-gt-badge ' + (isStation ? 'eval-gt-station' : 'eval-gt-med');
+    evalGtBadge.innerHTML = (isStation ? '&#x1F4CA; ' : '&#x26A0; ') + src + ' &middot; ' + data.n_dates + ' location-days';
 
     // Update swatch colors
     if (data.provider_colors) {
@@ -1035,49 +1013,137 @@ if (document.getElementById('eval-location')) {
 }
 {% endif %}
 
-// ── DWD station import UI ──────────────────────────────────────────
+{% if tab == 'locations' and station_import and station_import.stations %}
+// ── station import UI: one map for all observation providers ───────
 
-function filterDwdStations() {
-  const q = (document.getElementById('dwdFilter').value || '').toLowerCase();
-  document.querySelectorAll('.dwd-station-label').forEach(label => {
-    label.style.display = label.dataset.name.includes(q) ? '' : 'none';
-  });
-  document.querySelectorAll('.dwd-state-group').forEach(group => {
-    const visible = group.querySelectorAll('.dwd-station-label[style*="display: none"]');
-    const total = group.querySelectorAll('.dwd-station-label').length;
-    group.style.display = (q && visible.length === total) ? 'none' : '';
-  });
+const ST_STATIONS = {{ station_import.stations | tojson }};
+const ST_COLORS   = {{ provider_colors | tojson }};
+const ST_DEFAULT_COLOR  = '#a855f7';
+const ST_IMPORTED_COLOR = '#9ca3af';
+
+const stSelected = new Map();   // 'provider:id' -> { station, marker }
+let stMarkers = [];             // [{ key, s, m }]
+
+function stColor(s) {
+  return s.imported ? ST_IMPORTED_COLOR : (ST_COLORS[s.provider] || ST_DEFAULT_COLOR);
 }
 
-function toggleDwdState(el) {
-  const list = el.parentElement.querySelector('.dwd-station-list');
-  list.style.display = list.style.display === 'none' ? '' : 'none';
+function stBaseStyle(s, selected) {
+  return {
+    radius: selected ? 8 : 5,
+    color: selected ? '#111827' : '#ffffff',
+    weight: selected ? 2 : 1,
+    fillColor: stColor(s),
+    fillOpacity: s.imported ? .5 : .9,
+    opacity: 1,
+  };
 }
 
-function selectAllDwd(select) {
-  document.querySelectorAll('.dwd-checkbox:not(:disabled)').forEach(cb => cb.checked = select);
-  updateDwdCount();
-}
+const stMap = L.map('stationMap');
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 18,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+}).addTo(stMap);
 
-function selectAllInState(el, select) {
-  const group = el.closest('.dwd-state-group');
-  group.querySelectorAll('.dwd-checkbox:not(:disabled)').forEach(cb => cb.checked = select);
-  updateDwdCount();
+for (const s of ST_STATIONS) {
+  const key = s.provider + ':' + s.id;
+  const m = L.circleMarker([s.latitude, s.longitude], stBaseStyle(s, false));
+  const height = s.height != null ? ' · ' + s.height + ' m' : '';
+  m.bindTooltip(`${s.name} — ${s.provider_label} (${s.state})${height}` +
+                (s.imported ? ' · ✓ imported' : ''));
+  if (!s.imported) m.on('click', () => stToggle(key, s, m));
+  m.addTo(stMap);
+  stMarkers.push({ key, s, m });
 }
+stMap.fitBounds(L.latLngBounds(ST_STATIONS.map(s => [s.latitude, s.longitude])), { padding: [20, 20] });
 
-function updateDwdCount() {
-  const count = document.querySelectorAll('.dwd-checkbox:checked:not(:disabled)').length;
-  const btn = document.getElementById('importDwdBtn');
-  if (btn) {
-    btn.textContent = 'Import selected (' + count + ')';
-    btn.disabled = count === 0;
+// Legend: one entry per provider present on the map
+{
+  const legend = document.getElementById('stLegend');
+  const seen = new Map();
+  for (const s of ST_STATIONS) {
+    if (!seen.has(s.provider)) seen.set(s.provider, s.provider_label);
   }
-  const span = document.getElementById('dwdSelectedCount');
-  if (span) span.textContent = count + ' selected';
+  for (const [prov, label] of seen) {
+    const chip = document.createElement('span');
+    chip.style.cssText = 'display:inline-flex; align-items:center; gap:.35rem;';
+    chip.innerHTML = `<span style="width:11px; height:11px; border-radius:50%;
+      background:${ST_COLORS[prov] || ST_DEFAULT_COLOR}; border:1px solid rgba(0,0,0,.2);"></span>${label}`;
+    legend.appendChild(chip);
+  }
+  const chip = document.createElement('span');
+  chip.style.cssText = 'display:inline-flex; align-items:center; gap:.35rem; color:var(--muted);';
+  chip.innerHTML = `<span style="width:11px; height:11px; border-radius:50%;
+    background:${ST_IMPORTED_COLOR}; border:1px solid rgba(0,0,0,.2);"></span>imported`;
+  legend.appendChild(chip);
 }
 
-document.querySelectorAll('.dwd-checkbox').forEach(cb => {
-  cb.addEventListener('change', updateDwdCount);
+function stToggle(key, s, m) {
+  if (stSelected.has(key)) stSelected.delete(key);
+  else stSelected.set(key, { station: s, marker: m });
+  m.setStyle(stBaseStyle(s, stSelected.has(key)));
+  stRenderSelection();
+}
+
+function stRenderSelection() {
+  const list = document.getElementById('stSelectedList');
+  list.replaceChildren(...[...stSelected.entries()].map(([key, { station }]) => {
+    const chip = document.createElement('span');
+    chip.style.cssText = `display:inline-flex; align-items:center; gap:.35rem; font-size:.8rem;
+      padding:.15rem .5rem; border:1px solid var(--border); border-radius:99px; background:var(--surface);`;
+    const dot = document.createElement('span');
+    dot.style.cssText = `width:9px; height:9px; border-radius:50%;
+      background:${ST_COLORS[station.provider] || ST_DEFAULT_COLOR};`;
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.textContent = '×';
+    x.style.cssText = 'background:none; border:none; cursor:pointer; color:var(--muted); font-size:.9rem; line-height:1; padding:0;';
+    x.addEventListener('click', () => {
+      const sel = stSelected.get(key);
+      if (sel) stToggle(key, sel.station, sel.marker);
+    });
+    chip.append(dot, document.createTextNode(station.name), x);
+    return chip;
+  }));
+  const count = stSelected.size;
+  const btn = document.getElementById('importStationsBtn');
+  btn.textContent = 'Import selected (' + count + ')';
+  btn.disabled = count === 0;
+  document.getElementById('stSelectedCount').textContent = count + ' selected';
+}
+
+function stFilterChanged() {
+  const q = (document.getElementById('stFilter').value || '').trim().toLowerCase();
+  const matching = [];
+  for (const { s, m } of stMarkers) {
+    const match = !q || s.name.toLowerCase().includes(q);
+    m.setStyle({ opacity: match ? 1 : .12, fillOpacity: match ? (s.imported ? .5 : .9) : .08 });
+    if (match) matching.push([s.latitude, s.longitude]);
+  }
+  // Zoom to the matching stations while searching
+  if (q && matching.length) {
+    stMap.fitBounds(L.latLngBounds(matching), { padding: [40, 40], maxZoom: 11 });
+  }
+}
+
+function stInjectSelection() {
+  const form = document.getElementById('stImportForm');
+  form.querySelectorAll('.st-dyn-field').forEach(el => el.remove());
+  for (const key of stSelected.keys()) {
+    const el = document.createElement('input');
+    el.type = 'hidden';
+    el.name = 'station';
+    el.value = key;
+    el.className = 'st-dyn-field';
+    form.appendChild(el);
+  }
+  document.getElementById('importStationsBtn').disabled = true;
+}
+
+// Leaflet mis-sizes the map when the <details> is toggled — recompute
+document.getElementById('stationImport').addEventListener('toggle', () => {
+  setTimeout(() => stMap.invalidateSize(), 50);
 });
+{% endif %}
 </script>
 {% endblock %}

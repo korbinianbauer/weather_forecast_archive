@@ -99,8 +99,8 @@ def init_db():
 def _init_default_settings(conn):
     defaults = {
         'poll_cron':        '0 6 * * *',
-'provider_colors': json.dumps({'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'wetteronline': '#f97316', 'dwd': '#dc2626', 'average': '#111827'}),
-        'provider_delays':  json.dumps({'wetter_com': 0.25, 'meteoblue': 0.25, 'wetteronline': 0.25, 'dwd': 0.25}),
+'provider_colors': json.dumps({'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'wetteronline': '#f97316', 'dwd': '#dc2626', 'lwd_bayern': '#0d9488', 'average': '#111827'}),
+        'provider_delays':  json.dumps({'wetter_com': 0.25, 'meteoblue': 0.25, 'wetteronline': 0.25, 'dwd': 0.25, 'lwd_bayern': 0.25}),
     }
     for key, val in defaults.items():
         conn.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (key, val))
@@ -616,25 +616,27 @@ def get_unobserved_forecast_dates(location_id: int, observation_provider: str) -
         return dates
 
 
-def get_imported_dwd_ids() -> set[str]:
-    """Return set of all DWD station IDs used by any location source
+def get_imported_station_ids(provider: str) -> set[str]:
+    """Return set of all station IDs of *provider* used by any location source
     (bulk-imported or manually attached)."""
     with get_db() as conn:
         rows = conn.execute(
             'SELECT DISTINCT provider_location_id FROM location_sources WHERE provider = ?',
-            ('dwd',),
+            (provider,),
         ).fetchall()
         return {r[0] for r in rows}
 
 
-def get_bulk_imported_dwd_ids() -> set[str]:
-    """Return set of DWD station IDs created via the bulk-import UI
-    (marked with imported_dwd in the source metadata)."""
+def get_bulk_imported_station_ids(provider: str) -> set[str]:
+    """Return set of station IDs of *provider* created via the bulk-import UI
+    (marked with imported_station — or the legacy imported_dwd — in the
+    source metadata)."""
     with get_db() as conn:
         rows = conn.execute(
             "SELECT DISTINCT provider_location_id FROM location_sources "
-            "WHERE provider = ? AND json_extract(metadata, '$.imported_dwd')",
-            ('dwd',),
+            "WHERE provider = ? AND (json_extract(metadata, '$.imported_station')"
+            "                        OR json_extract(metadata, '$.imported_dwd'))",
+            (provider,),
         ).fetchall()
         return {r[0] for r in rows}
 

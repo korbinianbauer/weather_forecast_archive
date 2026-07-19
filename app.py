@@ -17,7 +17,7 @@ from flask import (Flask, abort, flash, jsonify, make_response, redirect,
 
 import db
 import providers
-from poller import _poll_source, poll_all_due
+from poller import _loc_label, _poll_source, poll_all_due
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -186,19 +186,23 @@ def _load_provider_colors() -> dict[str, str]:
         colors = json.loads(db.get_setting('provider_colors', '{}'))
     except json.JSONDecodeError:
         colors = {}
-    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'average': '#111827', 'median': '#111827', 'dwd': '#dc2626'}
+    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'average': '#111827', 'median': '#111827', 'dwd': '#dc2626', 'lwd_bayern': '#0d9488'}
     return {**defaults, **colors}
 
 
-# Providers delivering measured ground truth instead of forecasts (e.g. DWD).
-# They are excluded from the forecast average/median and drawn specially in the plots.
-_OBSERVATION_PROVIDERS = {p.name for p in providers.all_providers()
-                          if getattr(p, 'is_observation', False)}
+# Providers delivering measured ground truth instead of forecasts (DWD,
+# LWD Bayern). They are excluded from the forecast average/median and drawn
+# specially in the plots. The list keeps registry order — it doubles as the
+# priority order when picking ground truth in 'auto' mode.
+_OBSERVATION_PROVIDER_ORDER = [p.name for p in providers.all_providers()
+                               if getattr(p, 'is_observation', False)]
+_OBSERVATION_PROVIDERS = set(_OBSERVATION_PROVIDER_ORDER)
 
 
 @app.context_processor
 def inject_provider_colors():
-    return {'provider_colors': _load_provider_colors()}
+    return {'provider_colors': _load_provider_colors(),
+            'observation_providers': _OBSERVATION_PROVIDER_ORDER}
 
 
 # ── provider color helpers ────────────────────────────────────────────────────
@@ -286,7 +290,8 @@ def index():
         first_provider = next(
             (s['provider'] for s in sources if s['provider'] not in _OBSERVATION_PROVIDERS),
             sources[0]['provider'] if sources else None)
-        has_dwd = any(s['provider'] == 'dwd' for s in sources)
+        obs_providers = [p for p in _OBSERVATION_PROVIDER_ORDER
+                         if p in configured_providers]
         location_data.append({
             'location': loc,
             'all_dates': window_dates,
@@ -295,7 +300,7 @@ def index():
             'pressure_range': db.get_metric_range(loc['id'], 'pressure'),
             'current': _current_weather(loc['id'], first_provider) if first_provider else None,
             'current_provider': first_provider,
-            'has_dwd': has_dwd,
+            'obs_providers': obs_providers,
         })
 
     r = make_response(render_template(
@@ -334,16 +339,20 @@ def search():
 
 @app.route('/dwd_stations')
 def dwd_stations():
-    """Nearest DWD stations (with distance) for the add-location dialog."""
+    """Nearest observation stations (with distance) for the add-location
+    dialog. ?provider= selects the station network (default: dwd)."""
+    provider_name = request.args.get('provider', 'dwd')
+    if provider_name not in _OBSERVATION_PROVIDERS:
+        return jsonify([])
     try:
         lat = float(request.args['lat'])
         lon = float(request.args['lon'])
     except (KeyError, TypeError, ValueError):
         return jsonify([])
     try:
-        stations = providers.get('dwd').nearest_stations(lat, lon, limit=5)
+        stations = providers.get(provider_name).nearest_stations(lat, lon, limit=5)
     except Exception as e:
-        logger.error('DWD station lookup failed: %s', e)
+        logger.error('%s station lookup failed: %s', provider_name, e)
         return jsonify([])
     return jsonify([
         {
@@ -396,7 +405,8 @@ def add_location():
             try:
                 _poll_source(location_id, source)
             except Exception as e:
-                logger.error('Initial poll failed for %s: %s', source['provider'], e)
+                logger.error('Initial poll failed for location %s (%s) via %s: %s',
+                             location_id, name, source['provider'], e)
         _active_refreshes.discard(location_id)
 
     threading.Thread(target=_initial_poll, daemon=True).start()
@@ -872,14 +882,16 @@ def api_evaluation():
         if not locations:
             return jsonify({'results': {}, 'warning': 'No locations.'})
         location_ids = [loc['id'] for loc in locations]
-    elif location_param == 'all_dwd':
+    elif location_param.startswith('all_') and location_param[4:] in _OBSERVATION_PROVIDERS:
+        obs_name = location_param[4:]
         locations = db.get_locations(show_hidden=True)
         location_ids = [
             loc['id'] for loc in locations
-            if any(s['provider'] == 'dwd' for s in db.get_location_sources(loc['id']))
+            if any(s['provider'] == obs_name for s in db.get_location_sources(loc['id']))
         ]
         if not location_ids:
-            return jsonify({'results': {}, 'warning': 'No locations with DWD source.'})
+            label = providers.get(obs_name).display_name
+            return jsonify({'results': {}, 'warning': f'No locations with {label} source.'})
     else:
         try:
             loc_id = int(location_param)
@@ -901,7 +913,7 @@ def api_evaluation():
     if not all_rows:
         return jsonify({'results': {}, 'warning': 'No data in selected range.'})
 
-    dwd_rows      = [r for r in all_rows if r['provider'] == 'dwd']
+    obs_rows      = [r for r in all_rows if r['provider'] in _OBSERVATION_PROVIDERS]
     forecast_rows = [r for r in all_rows if r['provider'] not in _OBSERVATION_PROVIDERS]
     if not forecast_rows:
         return jsonify({'results': {}, 'warning': 'No forecast data available.'})
@@ -911,15 +923,21 @@ def api_evaluation():
     for r in all_rows:
         by_loc_date[(r['_loc_id'], r['forecast_time'][:10])].append(r)
 
+    # gt_source is 'auto', 'average', or an observation provider name.
     gt_values: dict[tuple[int, str], dict[str, float | None]] = {}
     for (lid, dt), date_rows in sorted(by_loc_date.items()):
-        dwd_row = next((r for r in date_rows if r['provider'] == 'dwd'), None)
+        if gt_source in _OBSERVATION_PROVIDERS:
+            obs_row = next((r for r in date_rows if r['provider'] == gt_source), None)
+        else:  # auto/average: any observation row, in provider priority order
+            obs_row = next(
+                (r for p in _OBSERVATION_PROVIDER_ORDER
+                 for r in date_rows if r['provider'] == p), None)
 
-        if (gt_source == 'auto' or gt_source == 'dwd') and dwd_row is not None:
-            gt_values[(lid, dt)] = {var: dwd_row.get(var) for var in _VAR_ORDER}
+        if gt_source != 'average' and obs_row is not None:
+            gt_values[(lid, dt)] = {var: obs_row.get(var) for var in _VAR_ORDER}
             continue
 
-        if (gt_source == 'average') or (gt_source == 'auto' and dwd_row is None):
+        if (gt_source == 'average') or (gt_source == 'auto' and obs_row is None):
             closest: dict[str, dict] = {}
             for r in date_rows:
                 if r['provider'] in _OBSERVATION_PROVIDERS:
@@ -973,18 +991,23 @@ def api_evaluation():
     # ── ground truth description ────────────────────────────────────────────
     gt_total = len(gt_values)
     n_locs   = len(location_ids)
-    if gt_source == 'dwd':
-        gt_src = 'DWD weather station observations'
+    gt_is_station = False
+    if gt_source in _OBSERVATION_PROVIDERS:
+        gt_src = f'{provider_labels[gt_source]} weather station observations'
+        gt_is_station = True
     elif gt_source == 'average':
         gt_src = 'Average of latest forecasts'
     else:
-        dwd_loc_dates = {(r['_loc_id'], r['forecast_time'][:10]) for r in dwd_rows}
-        gt_dwd = sum(1 for k in gt_values if k in dwd_loc_dates)
-        if gt_dwd:
-            if gt_dwd == gt_total:
-                gt_src = 'DWD weather station observations'
+        obs_loc_dates = {(r['_loc_id'], r['forecast_time'][:10]) for r in obs_rows}
+        gt_obs = sum(1 for k in gt_values if k in obs_loc_dates)
+        obs_names = ' / '.join(provider_labels[p] for p in _OBSERVATION_PROVIDER_ORDER
+                               if any(r['provider'] == p for r in obs_rows))
+        if gt_obs:
+            gt_is_station = True
+            if gt_obs == gt_total:
+                gt_src = f'{obs_names} weather station observations'
             else:
-                gt_src = f'DWD ({gt_dwd}/{gt_total} location-days) + average forecast'
+                gt_src = f'{obs_names} ({gt_obs}/{gt_total} location-days) + average forecast'
         else:
             gt_src = 'Average of latest forecasts (no weather station)'
     if n_locs > 1:
@@ -993,7 +1016,8 @@ def api_evaluation():
     return jsonify({
         'results': results,
         'ground_truth_source': gt_src,
-        'has_dwd_data': bool(dwd_rows),
+        'gt_is_station': gt_is_station,
+        'has_obs_data': bool(obs_rows),
         'n_dates': gt_total,
         'n_locations': n_locs,
         'provider_labels': provider_labels,
@@ -1137,7 +1161,8 @@ def refresh_location(location_id):
             try:
                 _poll_source(location_id, source)
             except Exception as e:
-                logger.error('Refresh failed: %s', e)
+                logger.error('Refresh failed for location %s: %s',
+                             _loc_label(location_id), e)
         _active_refreshes.discard(location_id)
 
     threading.Thread(target=_run, daemon=True).start()
@@ -1211,39 +1236,51 @@ def settings_page():
         configured = {s['provider'] for s in srcs}
         available_providers_by_loc[loc['id']] = [p for p in all_providers_list if p.name not in configured]
 
-    # Separate DWD bulk-imported locations (metadata flag set by /locations/import_dwd);
-    # locations where the user attached a DWD source manually stay in the regular list.
+    # Separate bulk-imported station locations (metadata flag set by
+    # /locations/import_stations); locations where the user attached a station
+    # source manually stay in the regular list.
     regular_locations = []
-    dwd_locations = []
-    bulk_imported_dwd_ids = db.get_bulk_imported_dwd_ids()
+    station_locations: dict[str, list] = {p: [] for p in _OBSERVATION_PROVIDER_ORDER}
+    bulk_ids = {p: db.get_bulk_imported_station_ids(p) for p in _OBSERVATION_PROVIDER_ORDER}
     for loc in all_locations:
         srcs = location_sources.get(loc['id'], [])
-        is_dwd_import = any(
-            s['provider'] == 'dwd' and s['provider_location_id'] in bulk_imported_dwd_ids
-            for s in srcs
-        )
-        if is_dwd_import:
-            dwd_locations.append(loc)
+        owner = next(
+            (p for p in _OBSERVATION_PROVIDER_ORDER
+             if any(s['provider'] == p and s['provider_location_id'] in bulk_ids[p]
+                    for s in srcs)),
+            None)
+        if owner:
+            station_locations[owner].append(loc)
         else:
             regular_locations.append(loc)
 
-    # Load DWD stations for the import UI. Any existing DWD source (bulk or manual)
-    # counts as imported so the picker never creates a duplicate location.
-    dwd_stations_by_state: list[tuple[str, list[dict]]] = []
+    # Load the stations of all observation providers for the map-based import
+    # UI — one flat list, color-coded by provider in the frontend. Any existing
+    # source (bulk or manual) counts as imported so the picker never creates a
+    # duplicate location.
+    station_import: dict = {'stations': [], 'errors': []}
     if tab == 'locations':
-        try:
-            dwd_stations = providers.get('dwd').all_stations()
-        except Exception:
-            logger.exception('Could not load DWD station list')
-            dwd_stations = []
-        used_dwd_ids = db.get_imported_dwd_ids()
-        state_map: dict[str, list[dict]] = {}
-        for s in dwd_stations:
-            state_map.setdefault(s['state'], []).append(s)
-        for state in sorted(state_map, key=lambda st: -len(state_map[st])):
-            stations = [dict(s, imported=s['id'] in used_dwd_ids)
-                        for s in state_map[state]]
-            dwd_stations_by_state.append((state, stations))
+        for pname in _OBSERVATION_PROVIDER_ORDER:
+            prov = providers.get(pname)
+            try:
+                stations = prov.all_stations()
+            except Exception:
+                logger.exception('Could not load %s station list', pname)
+                station_import['errors'].append(prov.display_name)
+                continue
+            used_ids = db.get_imported_station_ids(pname)
+            for s in stations:
+                station_import['stations'].append({
+                    'provider': pname,
+                    'provider_label': prov.display_name,
+                    'id': s['id'],
+                    'name': s['name'],
+                    'state': s['state'],
+                    'latitude': s['latitude'],
+                    'longitude': s['longitude'],
+                    'height': s['height'],
+                    'imported': s['id'] in used_ids,
+                })
 
     try:
         stored_colors = json.loads(all_settings.get('provider_colors', '{}'))
@@ -1316,14 +1353,14 @@ def settings_page():
         all_settings=all_settings,
         all_locations=all_locations,
         regular_locations=regular_locations,
-        dwd_locations=dwd_locations,
+        station_locations=station_locations,
         location_sources=location_sources,
         available_providers_by_loc=available_providers_by_loc,
         all_providers=all_providers_list,
         provider_labels=provider_labels,
         stored_colors=stored_colors,
         stored_delays=stored_delays,
-        dwd_stations_by_state=dwd_stations_by_state,
+        station_import=station_import,
         db_tables=db_tables_summary,
         db_active_table=db_active_table,
         db_rows=db_rows,
@@ -1340,19 +1377,25 @@ def settings_page():
     )
 
 
-_import_dwd_lock = threading.Lock()
+_import_stations_lock = threading.Lock()
 
 
-@app.route('/locations/import_dwd', methods=['POST'])
+@app.route('/locations/import_stations', methods=['POST'])
 @login_required
 @csrf_protect
-def import_dwd_stations():
-    station_ids = request.form.getlist('station_id')
-    if not station_ids:
-        flash('No DWD stations selected.')
+def import_stations():
+    # Selections come from the combined station map as 'provider:station_id'
+    # tokens and may span several observation providers.
+    by_provider: dict[str, list[str]] = {}
+    for token in request.form.getlist('station'):
+        pname, _, sid = token.partition(':')
+        if pname in _OBSERVATION_PROVIDERS and sid:
+            by_provider.setdefault(pname, []).append(sid)
+    if not by_provider:
+        flash('No stations selected.')
         return redirect(url_for('settings_page', tab='locations'))
 
-    if not _import_dwd_lock.acquire(blocking=False):
+    if not _import_stations_lock.acquire(blocking=False):
         flash('An import is already in progress.')
         return redirect(url_for('settings_page', tab='locations'))
 
@@ -1360,27 +1403,27 @@ def import_dwd_stations():
     # matcher thread (once started) or by the finally below.
     thread_owns_lock = False
     try:
-        all_stations = {s['id']: s for s in providers.get('dwd').all_stations()}
-        already = db.get_imported_dwd_ids()
-
         new_locations: list[tuple[int, dict]] = []
-        for sid in station_ids:
-            if sid in already:
-                continue
-            station = all_stations.get(sid)
-            if not station:
-                continue
-            loc_id = db.add_location(
-                station['name'], station['latitude'], station['longitude'],
-                hidden=True,
-            )
-            db.add_location_source(loc_id, 'dwd', sid, {
-                'station_name': station['name'],
-                'state': station['state'],
-                'height': station['height'],
-                'imported_dwd': True,
-            })
-            new_locations.append((loc_id, station))
+        for provider_name, station_ids in by_provider.items():
+            all_stations = {s['id']: s for s in providers.get(provider_name).all_stations()}
+            already = db.get_imported_station_ids(provider_name)
+            for sid in station_ids:
+                if sid in already:
+                    continue
+                station = all_stations.get(sid)
+                if not station:
+                    continue
+                loc_id = db.add_location(
+                    station['name'], station['latitude'], station['longitude'],
+                    hidden=True,
+                )
+                db.add_location_source(loc_id, provider_name, sid, {
+                    'station_name': station['name'],
+                    'state': station['state'],
+                    'height': station['height'],
+                    'imported_station': True,
+                })
+                new_locations.append((loc_id, station))
 
         if not new_locations:
             flash('All selected stations are already imported.')
@@ -1410,15 +1453,15 @@ def import_dwd_stations():
                                 cached.extra or {},
                             )
             finally:
-                _import_dwd_lock.release()
+                _import_stations_lock.release()
 
         threading.Thread(target=_match_providers, daemon=True).start()
         thread_owns_lock = True
 
-        flash(f'Added {len(new_locations)} DWD station(s). Matching forecast providers in background…')
+        flash(f'Added {len(new_locations)} station(s). Matching forecast providers in background…')
     finally:
         if not thread_owns_lock:
-            _import_dwd_lock.release()
+            _import_stations_lock.release()
 
     return redirect(url_for('settings_page', tab='locations'))
 

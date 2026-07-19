@@ -82,7 +82,7 @@
   .ov-card:hover { border-color: var(--primary); }
   .ov-card.active { border-color: var(--primary); outline: 2px solid var(--primary); outline-offset: -2px; }
   .ov-name { font-weight: 700; font-size: .95rem; margin-bottom: .25rem; }
-  .dwd-badge {
+  .obs-badge {
     display: inline-block; font-size: .6rem; font-weight: 700; letter-spacing: .04em;
     background: #dc2626; color: #fff; border-radius: 3px; padding: .1rem .35rem;
     vertical-align: middle; margin-left: .35rem;
@@ -129,7 +129,7 @@
          title="Show forecast details for {{ loc.name }}">
       <div class="ov-name">{{ loc.name }}
         {% if loc.id in polling_location_ids %}<span class="spinner" style="margin-left:.3rem;"></span>{% endif %}
-        {% if item.has_dwd %}<span class="dwd-badge">DWD</span>{% endif %}
+        {% for op in item.obs_providers %}<span class="obs-badge" style="background:{{ provider_colors.get(op, '#dc2626') }}">{{ provider_labels.get(op, op) }}</span>{% endfor %}
       </div>
       {% if cur %}
         {% if cur.icon_url %}
@@ -164,7 +164,7 @@
 
     <div class="loc-header">
       <h2>{{ loc.name }}
-        {% if item.has_dwd %}<span class="dwd-badge">DWD</span>{% endif %}
+        {% for op in item.obs_providers %}<span class="obs-badge" style="background:{{ provider_colors.get(op, '#dc2626') }}">{{ provider_labels.get(op, op) }}</span>{% endfor %}
       </h2>
       <span style="font-size:.75rem; color:var(--muted);">
         {{ '%.4f'|format(loc.latitude) }}°, {{ '%.4f'|format(loc.longitude) }}°
@@ -220,7 +220,7 @@
     <div id="rows-{{ loc.id }}">
       {% if item.all_dates %}
         {% for row in item.rows %}
-        {% if row.provider != 'dwd' %}
+        {% if row.provider not in observation_providers %}
         <div class="provider-row">
           <div class="provider-label">
             {{ provider_labels.get(row.provider, row.provider) }}
@@ -331,7 +331,7 @@
       <input type="text" id="locationName" class="search-input"
              placeholder="e.g. Berlin" autocomplete="off" oninput="updateSubmitBtn()">
     </div>
-    {% for p in all_providers if p.name != 'dwd' %}
+    {% for p in all_providers if p.name not in observation_providers %}
     <div class="provider-section" style="border:1px solid var(--border); border-radius:8px; padding:.85rem; margin-bottom:.75rem;">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:.6rem;">
         <span style="font-size:.8rem; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.05em;">
@@ -387,7 +387,7 @@ function openModal() {
 function closeModal() {
   document.getElementById('modal').classList.remove('open');
   document.getElementById('locationName').value = '';
-  {% for p in all_providers if p.name != 'dwd' %}
+  {% for p in all_providers if p.name not in observation_providers %}
   clearProvider('{{ p.name }}');
   document.getElementById('search-{{ p.name }}').value = '';
   {% endfor %}
@@ -493,6 +493,9 @@ function injectFormFields() {
 })();
 const PROVIDER_COLORS = window.PROVIDER_COLORS;
 const DEFAULT_COLOR   = window.DEFAULT_COLOR;
+// Observation providers (weather stations) — excluded from forecast rows,
+// drawn dotted and listed under their own legend section.
+const OBS_PROVIDERS = new Set({{ observation_providers | tojson }});
 const plotRendered = {};
 
 function escHtml(s) {
@@ -1139,9 +1142,9 @@ function buildLegend(rows) {
     }
   }
 
-  addSection('Forecast', rows.filter(r => r.provider !== 'dwd' && r.provider !== 'average' && r.provider !== 'median'));
+  addSection('Forecast', rows.filter(r => !OBS_PROVIDERS.has(r.provider) && r.provider !== 'average' && r.provider !== 'median'));
   addSection('Combine', rows.filter(r => r.provider === 'average' || r.provider === 'median'));
-  addSection('Weather stations', rows.filter(r => r.provider === 'dwd'));
+  addSection('Weather stations', rows.filter(r => OBS_PROVIDERS.has(r.provider)));
 
   // Default: Average checked, Median unchecked
   if (items.average?.cb) items.average.cb.checked = true;
@@ -1212,7 +1215,7 @@ function renderGrid(locId) {
   let html = '';
   if (dates.length) {
     for (const row of loc.rows) {
-      if (row.provider === 'dwd') continue;
+      if (OBS_PROVIDERS.has(row.provider)) continue;
       html += '<div class="provider-row">';
       html += '<div class="provider-label">' + escHtml(row.label);
       if (row.fetched_at) {
@@ -1296,7 +1299,7 @@ function renderPlot(locId) {
 
   const container = document.getElementById('plot-charts-' + locId);
   const dates = loc.dates;
-  const forecastRows = loc.rows.filter(r => r.provider !== 'dwd');
+  const forecastRows = loc.rows.filter(r => !OBS_PROVIDERS.has(r.provider));
   const rows = forecastRows.length >= 2
     ? [...loc.rows, buildAverageRow(forecastRows, dates), buildMedianRow(forecastRows, dates)]
     : loc.rows;
@@ -1332,7 +1335,7 @@ function renderPlot(locId) {
     traces.forEach(t => {
       if (t._provider === 'average' && t.line?.width) t.line.dash = 'dash';
       if (t._provider === 'median' && t.line?.width) t.line.dash = 'dash';
-      if (t._provider === 'dwd' && t.line?.width) t.line.dash = 'dot';
+      if (OBS_PROVIDERS.has(t._provider) && t.line?.width) t.line.dash = 'dot';
     });
 
     const wrap = document.createElement('div');
@@ -1394,7 +1397,7 @@ function renderPlot(locId) {
   }
 
   function isCombine(p) { return p === 'average' || p === 'median'; }
-  function isForecast(p) { return p !== 'average' && p !== 'median' && p !== 'dwd'; }
+  function isForecast(p) { return p !== 'average' && p !== 'median' && !OBS_PROVIDERS.has(p); }
   function anyCombineActive() {
     return Object.entries(legendItems)
       .filter(([p]) => isCombine(p))
