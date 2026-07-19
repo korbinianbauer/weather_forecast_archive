@@ -941,6 +941,13 @@ def api_evaluation():
     for r in all_rows:
         by_loc_date[(r['_loc_id'], r['forecast_time'][:10])].append(r)
 
+    def _derive_precip_probability(row_vals: dict[str, float | None]) -> None:
+        """Stations measure amount, not probability: >0 mm means it rained."""
+        if row_vals.get('precip_probability') is None:
+            amount = row_vals.get('precip_amount')
+            if amount is not None:
+                row_vals['precip_probability'] = 100.0 if amount > 0 else 0.0
+
     # gt_source is 'auto', 'average', 'all_stations', or an observation provider name.
     gt_values: dict[tuple[int, str], dict[str, float | None]] = {}
     for (lid, dt), date_rows in sorted(by_loc_date.items()):
@@ -957,6 +964,7 @@ def api_evaluation():
                     row_vals[var] = statistics.mean(vals)
                 elif len(vals) == 1:
                     row_vals[var] = vals[0]
+            _derive_precip_probability(row_vals)
             if row_vals:
                 gt_values[(lid, dt)] = row_vals
             continue
@@ -966,7 +974,9 @@ def api_evaluation():
                  for r in date_rows if r['provider'] == p), None)
 
         if gt_source != 'average' and obs_row is not None:
-            gt_values[(lid, dt)] = {var: obs_row.get(var) for var in _VAR_ORDER}
+            row_vals = {var: obs_row.get(var) for var in _VAR_ORDER}
+            _derive_precip_probability(row_vals)
+            gt_values[(lid, dt)] = row_vals
             continue
 
         if (gt_source == 'average') or (gt_source == 'auto' and obs_row is None):
