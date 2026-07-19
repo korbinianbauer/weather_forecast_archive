@@ -186,7 +186,7 @@ def _load_provider_colors() -> dict[str, str]:
         colors = json.loads(db.get_setting('provider_colors', '{}'))
     except json.JSONDecodeError:
         colors = {}
-    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'average': '#111827', 'median': '#111827', 'dwd': '#dc2626', 'lwd_bayern': '#0d9488'}
+    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'average': '#111827', 'median': '#111827', 'dwd': '#dc2626', 'lwd_bayern': '#0d9488', 'lwd_tirol': '#9333ea', 'hd_tirol': '#ca8a04'}
     return {**defaults, **colors}
 
 
@@ -1379,6 +1379,34 @@ def settings_page():
 
 _import_stations_lock = threading.Lock()
 
+# A name-matched forecast location must lie within this radius of the station,
+# otherwise it is almost certainly a different place with the same name
+# (e.g. station 'Seegrube' near Innsbruck vs. the village in Mecklenburg).
+_MATCH_MAX_KM = 30.0
+
+
+def _match_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    import math
+    rlat1, rlon1, rlat2, rlon2 = map(math.radians, (lat1, lon1, lat2, lon2))
+    a = (math.sin((rlat2 - rlat1) / 2) ** 2 +
+         math.cos(rlat1) * math.cos(rlat2) * math.sin((rlon2 - rlon1) / 2) ** 2)
+    return 6371.0 * 2 * math.asin(math.sqrt(a))
+
+
+def _closest_result(results: list, lat: float, lon: float):
+    """Best search result for a station: the nearest one within
+    _MATCH_MAX_KM. Results without coordinates only win when no result
+    carries coordinates at all (then fall back to the first, as before)."""
+    with_coords = [r for r in results
+                   if r.latitude is not None and r.longitude is not None]
+    if not with_coords:
+        return results[0] if results else None
+    best = min(with_coords,
+               key=lambda r: _match_distance_km(lat, lon, r.latitude, r.longitude))
+    if _match_distance_km(lat, lon, best.latitude, best.longitude) > _MATCH_MAX_KM:
+        return None
+    return best
+
 
 @app.route('/locations/import_stations', methods=['POST'])
 @login_required
@@ -1431,9 +1459,10 @@ def import_stations():
 
         def _match_providers():
             try:
-                search_cache: dict[tuple[str, str], object] = {}
+                search_cache: dict[tuple[str, str], list] = {}
                 for idx, (loc_id, station) in enumerate(new_locations):
-                    city = station['name'].split('-')[0].split('(')[0].strip()
+                    city = (station['name'].split('-')[0].split('(')[0]
+                            .split('/')[0].strip())
                     for pname in ('wetter_com', 'meteoblue', 'wetteronline'):
                         key = (pname, city)
                         if key not in search_cache:
@@ -1441,16 +1470,16 @@ def import_stations():
                             if idx > 0 or search_cache:
                                 time.sleep(1.5)
                             try:
-                                results = providers.get(pname).search(city)
-                                search_cache[key] = results[0] if results else None
+                                search_cache[key] = providers.get(pname).search(city)
                             except Exception:
-                                search_cache[key] = None
-                        cached = search_cache[key]
-                        if cached:
+                                search_cache[key] = []
+                        best = _closest_result(search_cache[key],
+                                               station['latitude'], station['longitude'])
+                        if best:
                             db.add_location_source(
                                 loc_id, pname,
-                                cached.provider_location_id,
-                                cached.extra or {},
+                                best.provider_location_id,
+                                best.extra or {},
                             )
             finally:
                 _import_stations_lock.release()
