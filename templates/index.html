@@ -1806,8 +1806,8 @@ function hideLocation(locId, csrf) {
     return;
   }
   // One-finger drag must keep scrolling the page on mobile (two-finger
-  // pinch still zooms/pans); on desktop, wheel scroll stays page scroll.
-  const map = L.map('loc-map', { scrollWheelZoom: false, dragging: !L.Browser.mobile });
+  // pinch still zooms/pans).
+  const map = L.map('loc-map', { dragging: !L.Browser.mobile });
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 18,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
