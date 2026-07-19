@@ -52,22 +52,27 @@ _MAX_HISTORY_DATES = 30
 _STATION_CACHE_TTL = 6 * 3600
 _STATIONS_CACHE_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), 'wunderground_stations.json')
-_station_cache: dict = {'ts': 0.0, 'stations': [], 'loaded': False}
+_station_cache: dict = {'ts': 0.0, 'stations': [], 'file_mtime': 0.0}
 _station_cache_lock = threading.Lock()
 _station_fetch_running = False
 
 
 def _load_station_cache():
-    """Populate the in-process cache from disk once per process."""
-    if _station_cache['loaded']:
+    """Sync the in-process cache from disk when the file is newer — another
+    worker process may have refreshed it in the meantime."""
+    try:
+        mtime = os.path.getmtime(_STATIONS_CACHE_PATH)
+    except OSError:
         return
-    _station_cache['loaded'] = True
+    if mtime <= _station_cache['file_mtime']:
+        return
     try:
         with open(_STATIONS_CACHE_PATH) as f:
             data = json.load(f)
         _station_cache['stations'] = data.get('stations') or []
         _station_cache['ts'] = float(data.get('ts') or 0.0)
-    except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
+        _station_cache['file_mtime'] = mtime
+    except (json.JSONDecodeError, TypeError, ValueError, OSError):
         pass
 
 
