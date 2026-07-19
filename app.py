@@ -891,6 +891,15 @@ def api_evaluation():
         if not locations:
             return jsonify({'results': {}, 'warning': 'No locations.'})
         location_ids = [loc['id'] for loc in locations]
+    elif location_param == 'all_stations':
+        locations = db.get_locations(show_hidden=True)
+        location_ids = [
+            loc['id'] for loc in locations
+            if any(s['provider'] in _OBSERVATION_PROVIDERS
+                   for s in db.get_location_sources(loc['id']))
+        ]
+        if not location_ids:
+            return jsonify({'results': {}, 'warning': 'No locations with weather stations.'})
     elif location_param.startswith('all_') and location_param[4:] in _OBSERVATION_PROVIDERS:
         obs_name = location_param[4:]
         locations = db.get_locations(show_hidden=True)
@@ -932,21 +941,38 @@ def api_evaluation():
     for r in all_rows:
         by_loc_date[(r['_loc_id'], r['forecast_time'][:10])].append(r)
 
-    # gt_source is 'auto', 'average', or an observation provider name.
+    # gt_source is 'auto', 'average', 'all_stations', or an observation provider name.
     gt_values: dict[tuple[int, str], dict[str, float | None]] = {}
     for (lid, dt), date_rows in sorted(by_loc_date.items()):
         if gt_source in _OBSERVATION_PROVIDERS:
             obs_row = next((r for r in date_rows if r['provider'] == gt_source), None)
+        elif gt_source == 'all_stations':
+            obs_rows_here = [r for r in date_rows if r['provider'] in _OBSERVATION_PROVIDERS]
+            if obs_rows_here:
+                # Average all available station observations for this location+date
+                row_vals: dict[str, float | None] = {}
+                for var in _VAR_ORDER:
+                    vals = [r.get(var) for r in obs_rows_here if r.get(var) is not None]
+                    if len(vals) >= 2:
+                        row_vals[var] = statistics.mean(vals)
+                    elif len(vals) == 1:
+                        row_vals[var] = vals[0]
+                if row_vals:
+                    gt_values[(lid, dt)] = row_vals
+                    continue
+                obs_row = None
+            else:
+                obs_row = None
         else:  # auto/average: any observation row, in provider priority order
             obs_row = next(
                 (r for p in _OBSERVATION_PROVIDER_ORDER
                  for r in date_rows if r['provider'] == p), None)
 
-        if gt_source != 'average' and obs_row is not None:
+        if gt_source not in ('average', 'all_stations') and obs_row is not None:
             gt_values[(lid, dt)] = {var: obs_row.get(var) for var in _VAR_ORDER}
             continue
 
-        if (gt_source == 'average') or (gt_source == 'auto' and obs_row is None):
+        if (gt_source == 'average') or (gt_source == 'auto' and obs_row is None) or gt_source == 'all_stations':
             closest: dict[str, dict] = {}
             for r in date_rows:
                 if r['provider'] in _OBSERVATION_PROVIDERS:
@@ -1004,6 +1030,18 @@ def api_evaluation():
     if gt_source in _OBSERVATION_PROVIDERS:
         gt_src = f'{provider_labels[gt_source]} weather station observations'
         gt_is_station = True
+    elif gt_source == 'all_stations':
+        obs_loc_dates = {(r['_loc_id'], r['forecast_time'][:10]) for r in obs_rows}
+        gt_obs = sum(1 for k in gt_values if k in obs_loc_dates)
+        obs_names = ' / '.join(provider_labels[p] for p in _OBSERVATION_PROVIDER_ORDER
+                               if any(r['provider'] == p for r in obs_rows))
+        if gt_obs:
+            gt_is_station = True
+            gt_src = f'All stations ({obs_names})'
+            if gt_obs < gt_total:
+                gt_src += f' ({gt_obs}/{gt_total} location-days) + average forecast'
+        else:
+            gt_src = 'Average of latest forecasts (no weather station)'
     elif gt_source == 'average':
         gt_src = 'Average of latest forecasts'
     else:

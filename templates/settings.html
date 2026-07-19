@@ -590,6 +590,7 @@
         <label>Location</label>
         <select id="eval-location" onchange="evalLoadProviders()">
           <option value="all" selected>All locations</option>
+          <option value="all_stations">All locations with a station</option>
           {% for op in observation_providers %}
           <option value="all_{{ op }}">All {{ provider_labels.get(op, op) }} locations</option>
           {% endfor %}
@@ -612,6 +613,7 @@
         <label>Ground Truth</label>
         <select id="eval-gt-source" onchange="evalUpdate()">
           <option value="auto">Auto (weather stations preferred)</option>
+          <option value="all_stations">All weather stations (averaged)</option>
           {% for op in observation_providers %}
           <option value="{{ op }}">{{ provider_labels.get(op, op) }} observations only</option>
           {% endfor %}
