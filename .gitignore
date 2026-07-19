@@ -4,6 +4,7 @@ __pycache__/
 *.db
 *.log
 poll.pid
+wunderground_stations.json
 .env
 venv/
 .venv/

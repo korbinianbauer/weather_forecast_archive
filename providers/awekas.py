@@ -130,12 +130,44 @@ def _compass_mean(degs: list[float]) -> Optional[str]:
     return _COMPASS[round(deg / 22.5) % 16]
 
 
+def _filter_dwd_mirrors(stations: list[dict]) -> list[dict]:
+    """Drop AWEKAS stations that merely mirror official DWD stations.
+
+    AWEKAS imports DWD open-data stations into its own network (hardware
+    'DWD-Wetterstation', names like 'Stuttgart DWD') at the exact DWD
+    coordinates.  Those duplicates are already covered by the DWD provider,
+    so filter anything within 100 m of a DWD station — verified mirrors sit
+    at ≤ 25 m while the nearest genuine private station is > 500 m away.
+    """
+    try:
+        from . import dwd
+        dwd_stations = dwd._load_stations()
+    except Exception as e:
+        logger.warning('DWD station list unavailable, not filtering AWEKAS mirrors: %s', e)
+        return stations
+
+    kept = []
+    for s in stations:
+        mirror = any(
+            abs(s['latitude'] - d['latitude']) < 0.002
+            and _distance_km(s['latitude'], s['longitude'],
+                             d['latitude'], d['longitude']) < 0.1
+            for d in dwd_stations
+        )
+        if not mirror:
+            kept.append(s)
+    if len(kept) < len(stations):
+        logger.info('Filtered %d AWEKAS stations mirroring DWD stations',
+                    len(stations) - len(kept))
+    return kept
+
+
 def _load_stations() -> list[dict]:
     """All AWEKAS stations from a large bounding box (cached in-process).
 
     The mappoints endpoint returns {id, lat, lon} for each station.
     Station names are NOT included and must be fetched individually via
-    station.php.
+    station.php.  Stations mirroring official DWD stations are excluded.
     """
     if _station_cache['stations'] and time.time() - _station_cache['ts'] < _STATION_CACHE_TTL:
         return _station_cache['stations']
@@ -154,6 +186,8 @@ def _load_stations() -> list[dict]:
             'latitude': float(pt['lat']),
             'longitude': float(pt['lon']),
         })
+
+    stations = _filter_dwd_mirrors(stations)
 
     _station_cache['stations'] = stations
     _station_cache['ts'] = time.time()

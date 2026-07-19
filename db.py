@@ -99,8 +99,8 @@ def init_db():
 def _init_default_settings(conn):
     defaults = {
         'poll_cron':        '0 6 * * *',
-'provider_colors': json.dumps({'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'wetteronline': '#f97316', 'dwd': '#dc2626', 'lwd_bayern': '#0d9488', 'lwd_tirol': '#9333ea', 'hd_tirol': '#ca8a04', 'awekas': '#0ea5e9', 'average': '#111827'}),
-        'provider_delays':  json.dumps({'wetter_com': 0.25, 'meteoblue': 1.0, 'wetteronline': 0.25, 'dwd': 0.25, 'lwd_bayern': 0.25, 'lwd_tirol': 0.25, 'hd_tirol': 0.25, 'awekas': 0.25}),
+'provider_colors': json.dumps({'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'wetteronline': '#f97316', 'dwd': '#dc2626', 'lwd_bayern': '#0d9488', 'lwd_tirol': '#9333ea', 'hd_tirol': '#ca8a04', 'awekas': '#0ea5e9', 'wunderground': '#db2777', 'average': '#111827'}),
+        'provider_delays':  json.dumps({'wetter_com': 0.25, 'meteoblue': 1.0, 'wetteronline': 0.25, 'dwd': 0.25, 'lwd_bayern': 0.25, 'lwd_tirol': 0.25, 'hd_tirol': 0.25, 'awekas': 0.25, 'wunderground': 0.25}),
     }
     for key, val in defaults.items():
         conn.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (key, val))

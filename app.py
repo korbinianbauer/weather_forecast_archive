@@ -195,7 +195,7 @@ def _load_provider_colors() -> dict[str, str]:
         colors = json.loads(db.get_setting('provider_colors', '{}'))
     except json.JSONDecodeError:
         colors = {}
-    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'average': '#111827', 'median': '#111827', 'dwd': '#dc2626', 'lwd_bayern': '#0d9488', 'lwd_tirol': '#9333ea', 'hd_tirol': '#ca8a04'}
+    defaults = {'wetter_com': '#3b82f6', 'meteoblue': '#22c55e', 'average': '#111827', 'median': '#111827', 'dwd': '#dc2626', 'lwd_bayern': '#0d9488', 'lwd_tirol': '#9333ea', 'hd_tirol': '#ca8a04', 'awekas': '#0ea5e9', 'wunderground': '#db2777'}
     return {**defaults, **colors}
 
 

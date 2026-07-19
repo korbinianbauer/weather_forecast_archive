@@ -6,6 +6,7 @@ from .meteoblue import MeteoblueProvider
 from .tirol_smet import HdTirolProvider, LwdTirolProvider
 from .wetter_com import WetterComProvider
 from .wetteronline import WetterOnlineProvider
+from .wunderground import WundergroundProvider
 
 _all: list[WeatherProvider] = [
     WetterComProvider(),
@@ -16,6 +17,7 @@ _all: list[WeatherProvider] = [
     LwdTirolProvider(),
     HdTirolProvider(),
     AwekasProvider(),
+    WundergroundProvider(),
 ]
 
 REGISTRY: dict[str, WeatherProvider] = {p.name: p for p in _all}
