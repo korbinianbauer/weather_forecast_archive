@@ -83,20 +83,21 @@ class WetterOnlineProvider(WeatherProvider):
         return results
 
     def fetch_daily(self, provider_location_id: str, extra: dict) -> list[ForecastEntry]:
-        html = self._fetch_page(provider_location_id, extra)
-        return _parse_forecast(html) if html else []
+        trend = self._fetch_trend(provider_location_id, extra)
+        return _parse_forecast(trend) if trend else []
 
     def fetch_hourly(self, provider_location_id: str, extra: dict) -> list[ForecastEntry]:
         html = self._fetch_page(provider_location_id, extra)
-        return _parse_sub_daily(html) if html else []
+        trend = self._fetch_trend(provider_location_id, extra)
+        return _parse_sub_daily(html, trend)
 
     def fetch_all(self, provider_location_id: str, extra: dict) -> list[ForecastEntry]:
-        # Daily, hourly (hourcast) and 6-h interval data all live on the same
-        # city page — fetch it once.
+        # Hourcast (~49h true hourly) lives on the city page; daily and 6-h
+        # interval (MediumTerm) forecasts moved to the /wettertrend page —
+        # WetterOnline split these across two pages, so fetch both.
         html = self._fetch_page(provider_location_id, extra)
-        if not html:
-            return []
-        return _parse_forecast(html) + _parse_sub_daily(html)
+        trend = self._fetch_trend(provider_location_id, extra)
+        return _parse_forecast(trend) + _parse_sub_daily(html, trend)
 
     def _fetch_page(self, provider_location_id: str, extra: dict) -> str:
         slug = extra.get('slug', provider_location_id)
@@ -109,6 +110,32 @@ class WetterOnlineProvider(WeatherProvider):
             logger.error('WetterOnline fetch failed for %s: %s', slug, e)
             return ''
 
+    def _fetch_trend(self, provider_location_id: str, extra: dict) -> dict:
+        """Fetch /wettertrend/{slug}: daily (longTerm) and 6-h interval
+        (mediumTerm) forecast data, hydrated client-side via Angular's
+        `ng-state` JSON blob under the 'p_city_local/forecast' key."""
+        slug = extra.get('slug', provider_location_id)
+        url = f'{_BASE}/wettertrend/{slug}'
+        try:
+            resp = requests.get(url, headers=_HEADERS, timeout=20)
+            resp.raise_for_status()
+            html = resp.text
+        except Exception as e:
+            logger.error('WetterOnline trend fetch failed for %s: %s', slug, e)
+            return {}
+        m = re.search(r'<script id="ng-state"[^>]*>(.*?)</script>', html, re.DOTALL)
+        if not m:
+            logger.warning('WetterOnline: ng-state not found on trend page for %s', slug)
+            return {}
+        try:
+            state = json.loads(m.group(1))
+        except json.JSONDecodeError as e:
+            logger.warning('WetterOnline: ng-state parse failed for %s: %s', slug, e)
+            return {}
+        forecast = state.get('p_city_local/forecast') or {}
+        forecast['_icon_base'] = _icon_base(html)
+        return forecast
+
 
 def _icon_base(html: str) -> str:
     m = re.search(r'st\.wetteronline\.de/dr/(\d+\.\d+\.\d+)/', html)
@@ -119,86 +146,72 @@ def _icon_base(html: str) -> str:
 
 # ── HTML / JSON parsing ───────────────────────────────────────────────────────
 
-def _parse_forecast(html: str) -> list[ForecastEntry]:
-    base = _icon_base(html)
-    for script in re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL):
-        if 'metadata_p_city_local_LongTerm' not in script:
-            continue
-        try:
-            return _extract_longterm(script, base)
-        except Exception as e:
-            logger.warning('WetterOnline JSON extraction failed: %s', e)
-    logger.warning('WetterOnline: metadata_p_city_local_LongTerm not found in page')
-    return []
+def _parse_forecast(trend: dict) -> list[ForecastEntry]:
+    """Daily forecast from the /wettertrend page's 'longTerm' array (~16 days).
 
-
-def _extract_longterm(script: str, icon_base: str) -> list[ForecastEntry]:
-    key = '"metadata_p_city_local_LongTerm"'
-    idx = script.find(key)
-    if idx == -1:
-        return []
-    colon = script.index(':', idx + len(key))
-    arr_start = script.index('[', colon)
-    days, _ = json.JSONDecoder().raw_decode(script, arr_start)
-
-    today = date.today()
+    WetterOnline moved this off the city page (and dropped the old
+    'metadata_p_city_local_LongTerm' embed) some time before 2026-08-08 in
+    favor of an Angular app hydrated from ng-state JSON — see _fetch_trend.
+    """
+    days = trend.get('longTerm') or []
+    icon_base = trend.get('_icon_base', '')
     result = []
     for day_data in days:
         try:
-            entry = _parse_day(day_data, today, icon_base)
-            if entry and entry.forecast_time:
+            entry = _parse_day(day_data, icon_base)
+            if entry:
                 result.append(entry)
         except Exception as e:
             logger.warning('WetterOnline day parse error: %s', e)
     return result
 
 
-def _parse_day(d: dict, ref: date, icon_base: str = '') -> Optional[ForecastEntry]:
-    # date is "DD.MM." without year
-    m = re.match(r'(\d{1,2})\.(\d{2})\.', d.get('date', ''))
-    if not m:
-        return None
-    day, month = int(m.group(1)), int(m.group(2))
-    year = ref.year + (1 if month < ref.month else 0)
+def _parse_day(d: dict, icon_base: str = '') -> Optional[ForecastEntry]:
     try:
-        forecast_date = date(year, month, day)
+        forecast_date = date.fromisoformat(d.get('date', ''))
     except ValueError:
         return None
 
+    wind = d.get('wind') or {}
     wind_dir: Optional[str] = None
-    if d.get('windDirection') is not None:
+    if wind.get('direction') is not None:
         try:
-            wind_dir = _CARDINAL[round(float(d['windDirection']) / 45) % 8]
+            wind_dir = _CARDINAL[round(float(wind['direction']) / 45) % 8]
         except (ValueError, TypeError):
             pass
 
     symbol = d.get('symbol', '')
     icon_url = f'{icon_base}/{symbol}.png' if (symbol and icon_base) else None
 
+    temp = d.get('airTemperature') or {}
+    temp_max = (temp.get('max') or {}).get('celsius')
+    temp_min = (temp.get('min') or {}).get('celsius')
+
     return ForecastEntry(
         forecast_time=f'{forecast_date}T00:00:00',
         granularity='daily',
-        condition_text=_html.unescape(d['symbolText']) if d.get('symbolText') else None,
+        condition_text=None,
         icon_url=icon_url,
-        temp_max=_int(d.get('maxTemperature')),
-        temp_min=_int(d.get('minTemperature')),
+        temp_max=_int(temp_max),
+        temp_min=_int(temp_min),
         precip_probability=_int(d.get('precipitationProbability')),
         precip_amount=_float(d.get('precipitationAmount24')),
         wind_direction=wind_dir,
-        wind_speed=_wind_force_to_kmh(d.get('windForce')),
+        wind_speed=_wind_force_to_kmh(wind.get('force')),
         sunshine_hours=_float(d.get('absoluteSunshineDuration')),
     )
 
 
 # ── sub-daily parsing (hourcast + 6-h intervals) ──────────────────────────────
 
-def _parse_sub_daily(html: str) -> list[ForecastEntry]:
-    """Everything sub-daily the page offers: ~49 h of true hourly data
-    (hourcast) plus 6-h interval data for ~4 days (MediumTerm). Where both
-    cover the same timestamp the richer hourcast entry wins."""
-    entries = _parse_hourcast(html)
+def _parse_sub_daily(html: str, trend: dict) -> list[ForecastEntry]:
+    """Everything sub-daily available: ~49 h of true hourly data (hourcast,
+    from the city page) plus 6-h interval data for ~4 days (mediumTerm, from
+    the trend page). Where both cover the same timestamp the richer hourcast
+    entry wins."""
+    entries = _parse_hourcast(html) if html else []
     seen = {e.forecast_time for e in entries}
-    for entry in _parse_medium_term(html):
+    for entry in _parse_medium_term(trend):
         if entry.forecast_time not in seen:
             seen.add(entry.forecast_time)
             entries.append(entry)
@@ -284,24 +297,16 @@ def _parse_hourcast(html: str, now: Optional[datetime] = None) -> list[ForecastE
 _INTERVAL_HOURS = {'morning': 9, 'afternoon': 15, 'evening': 21, 'night': 3}
 
 
-def _parse_medium_term(html: str) -> list[ForecastEntry]:
-    """Parse the embedded MediumTerm JSON: 6-h intervals for ~4 days.
+def _parse_medium_term(trend: dict) -> list[ForecastEntry]:
+    """6-h interval forecast for ~4 days, from the /wettertrend page's
+    'mediumTerm' array.
 
-    Available per interval: condition + symbol, precip probability/amount,
-    wind direction + max gusts. No temperature.
+    Available per interval: condition + symbol, precip probability, wind
+    direction/force. No temperature, and no precip amount (the new payload
+    only exposes a coarse 'amountClass' bucket, not a figure).
     """
-    icon_base = _icon_base(html)
-    key = '"metadata_p_city_local_MediumTerm"'
-    idx = html.find(key)
-    if idx == -1:
-        return []
-    try:
-        colon = html.index(':', idx + len(key))
-        arr_start = html.index('[', colon)
-        days, _ = json.JSONDecoder().raw_decode(html, arr_start)
-    except (ValueError, json.JSONDecodeError) as e:
-        logger.warning('WetterOnline MediumTerm extraction failed: %s', e)
-        return []
+    icon_base = trend.get('_icon_base', '')
+    days = trend.get('mediumTerm') or []
 
     result = []
     for day_data in days:
