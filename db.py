@@ -147,7 +147,7 @@ def _migrate_forecast_time(conn):
 
 @contextmanager
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=20)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys = ON')
     try:
@@ -248,10 +248,6 @@ def get_locations(show_hidden: bool = False) -> list[dict]:
     with get_db() as conn:
         return [dict(r) for r in conn.execute(f'''
             SELECT l.*,
-                   (SELECT MAX(fetched_at) FROM forecast_snapshots
-                    WHERE location_id = l.id)                          AS last_polled,
-                   (SELECT COUNT(DISTINCT provider || fetched_at) FROM forecast_snapshots
-                    WHERE location_id = l.id)                          AS poll_count,
                    (SELECT GROUP_CONCAT(provider, ', ') FROM location_sources
                     WHERE location_id = l.id)                          AS providers
             FROM locations l {hidden_clause}
